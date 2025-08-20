@@ -1139,16 +1139,18 @@
   }
 
   // Button helpers for active state
-  function getCssBtn(kind){
-    return results.querySelector(`.picker-row[data-kind="${kind}"] .action-btn[data-action="css"]`);
+  function getCssBtn(kind) {
+    return results.querySelector(
+      `.picker-row[data-kind="${kind}"] .action-btn[data-action="css"]`
+    );
   }
-  function setCssButtonActive(kind, on){
+  function setCssButtonActive(kind, on) {
     const b = getCssBtn(kind);
-    if (b) b.classList.toggle('active', !!on);
+    if (b) b.classList.toggle("active", !!on);
   }
-  function clearAllCssButtonActive(){
-    setCssButtonActive('generic', false);
-    setCssButtonActive('specific', false);
+  function clearAllCssButtonActive() {
+    setCssButtonActive("generic", false);
+    setCssButtonActive("specific", false);
   }
 
   // copy in overlay
