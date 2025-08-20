@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         CSS Selector Picker (v1.21.4)
+// @name         CSS Selector Picker (v1.21.5)
 // @namespace    https://greasyfork.org/
 // @version      1.21.4
 // @description  A CSS selector picker for web pages, allowing you to select elements and generate useful CSS selectors on both Desktop and Mobile.
@@ -234,7 +234,8 @@
     }
     .picker-css-overlay .css-ov-copy:active{ transform:translateY(1px); }
     .picker-css-overlay pre{ margin:0; padding:12px 14px; overflow:auto; max-height:min(48vh, 520px); }
-    .picker-css-overlay code{ display:block; white-space:pre; }
+    .picker-css-overlay code{ display:block; white-space:pre; padding:12px; overflow:auto; }
+    .picker-css-overlay { overflow-y:auto; }
   `);
 
   // ---------- UI ----------
@@ -297,7 +298,7 @@
   cssOverlay.setAttribute("data-picker-ui", "1");
   cssOverlay.innerHTML = `
     <div class="css-ov-header" data-picker-ui="1">
-      <div class="css-ov-title" data-picker-ui="1">Computed CSS</div>
+      <div class="css-ov-title" data-picker-ui="1">Computed Styles</div>
       <button class="css-ov-copy" data-picker-ui="1" title="Copy CSS">Copy</button>
     </div>
     <pre data-picker-ui="1"><code class="css-ov-code" data-picker-ui="1"></code></pre>
