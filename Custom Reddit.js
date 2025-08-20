@@ -10,29 +10,32 @@
 
 (function () {
   // 1) Hide ASAP to avoid flash
-  const HIDE_ID = 'us-hide-until-styled';
-  const hide = document.createElement('style');
+  const HIDE_ID = "us-hide-until-styled";
+  const hide = document.createElement("style");
   hide.id = HIDE_ID;
-  hide.textContent = 'html{visibility:hidden !important;}';
+  hide.textContent = "html{visibility:hidden !important;}";
   // Use <html> if <head> not ready yet
   (document.head || document.documentElement).appendChild(hide);
 
   // 2) GM_addStyle wrapper with fallback
   const addCSS = (css) => {
-    if (typeof GM_addStyle === 'function') { GM_addStyle(css); return; }
-    if (typeof GM !== 'undefined' && typeof GM.addStyle === 'function') { GM.addStyle(css); return; }
-    const s = document.createElement('style'); s.textContent = css;
+    if (typeof GM_addStyle === "function") {
+      GM_addStyle(css);
+      return;
+    }
+    if (typeof GM !== "undefined" && typeof GM.addStyle === "function") {
+      GM.addStyle(css);
+      return;
+    }
+    const s = document.createElement("style");
+    s.textContent = css;
     document.head.appendChild(s);
   };
 
   // 3) Your CSS (inline here; or assemble dynamically)
   const CSS = `
-  
-/* Florin's Edits */
 
-.content > .sitetable {
-    background-color: red !important;
-}
+/* Florin's Edits */
 
 a {
     color: rgb(58, 58, 58) !important;
@@ -476,7 +479,6 @@ body.with-listing-chooser.listing-chooser-collapsed .listing-chooser .grippy {
 }
 
 .tabmenu a {
-    background: red;
     border-radius: 3px 3px 0 0 !important;
 }
 
@@ -823,14 +825,14 @@ body.with-listing-chooser.listing-chooser-collapsed .listing-chooser .grippy:aft
   };
 
   // If DOM is already interactive/complete, reveal now; else wait
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
       // Optional: add more late CSS here if needed
       // addCSS(moreCSS);
       reveal();
     });
     // Safety: if something delays DOMContentLoaded, still reveal at window load
-    window.addEventListener('load', reveal, { once: true });
+    window.addEventListener("load", reveal, { once: true });
   } else {
     reveal();
   }

@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         CSS Selector Picker (v1.21.5)
+// @name         CSS Selector Picker (v1.21.6)
 // @namespace    https://greasyfork.org/
 // @version      1.21.4
 // @description  A CSS selector picker for web pages, allowing you to select elements and generate useful CSS selectors on both Desktop and Mobile.
@@ -139,8 +139,7 @@
       box-shadow:0 3px 10px rgba(0,0,0,.10); outline:none; -webkit-user-select:none;
       pointer-events:auto;
       /* overlay lock icon on the right inside the pill */
-      position:relative!important;
-      padding-right:calc(var(--pill-pad-x) + 28px)!important;
+      position:relative !important;
     }
     .selector-pill.generic{  background:var(--orange-bg); border:2px solid var(--orange-bd); color:var(--text-light); }
     .selector-pill.specific{ background:var(--blue-bg);   border:2px solid var(--blue-bd);   color:var(--text-light); }
@@ -164,6 +163,9 @@
     }
     .action-btn.generic{ border-color:var(--orange-bd); }
     .action-btn.specific{ border-color:var(--blue-bd); }
+    /* Active state highlight for the CSS button */
+    .action-btn.generic.active{ background:var(--orange-bg); border-color:var(--orange-bd); }
+    .action-btn.specific.active{ background:var(--blue-bg); border-color:var(--blue-bd); }
 
     /* Overlays (never block) */
     .picker-hover-box{
@@ -201,11 +203,10 @@
     .picker-swipe-zone.disabled{ pointer-events:none; }
     .selector-pill .pill-text{ display:block; overflow:hidden; text-overflow:ellipsis; }
     .selector-pill .pill-lock{
-      position:absolute; right:8px; top:50%; transform:translateY(-50%);
-      width:20px; height:20px; border-radius:50%;
       display:none; align-items:center; justify-content:center;
-      background:rgba(0,0,0,.28); color:#fff; border:1.5px solid rgba(255,255,255,.65);
-      font-size:12px; line-height:1; cursor:pointer; user-select:none;
+      position:absolute; right:0px; top:0px;
+      width:50px; height:100%; padding:0; margin:0; border-radius:0 10px 10px 0;
+      font-size:20px; font-weight: bold; line-height:1; cursor:pointer; user-select:none;
       pointer-events:auto;
     }
     .selector-pill.generic .pill-lock{ border-color:var(--orange-bd); }
@@ -218,7 +219,11 @@
       background:#101114; color:#f5f7fb; border:1px solid rgba(255,255,255,.15);
       border-radius:10px; box-shadow:0 14px 40px rgba(0,0,0,.45);
       font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      pointer-events:auto; overflow:hidden; display:none;
+      pointer-events:auto; display:none;
+      /* Make the overlay itself scrollable and constrain height to viewport */
+      max-height:60vh;
+      overflow:scroll;
+      font-size: 8px;
     }
     .picker-css-overlay .css-ov-header{
       display:flex; align-items:center; justify-content:space-between;
@@ -233,9 +238,10 @@
       padding:6px 9px; border-radius:8px; cursor:pointer; font-weight:700; font-size:12px;
     }
     .picker-css-overlay .css-ov-copy:active{ transform:translateY(1px); }
-    .picker-css-overlay pre{ margin:0; padding:12px 14px; overflow:auto; max-height:min(48vh, 520px); }
-    .picker-css-overlay code{ display:block; white-space:pre; padding:12px; overflow:auto; }
-    .picker-css-overlay { overflow-y:auto; }
+    /* Constrain the pre/code area so long CSS output can scroll inside the overlay */
+    .picker-css-overlay pre{ margin:0; padding:12px 14px; overflow:auto; max-height:calc(60vh - 56px); }
+    .picker-css-overlay code{ display:block; white-space:pre; padding:12px; overflow:auto; word-break:break-word; }
+    .picker-css-overlay { /* keep existing behavior for other axes */ }
   `);
 
   // ---------- UI ----------
@@ -246,22 +252,22 @@
     <div class="picker-row" data-kind="generic" data-picker-ui="1">
       <div class="selector-pill generic" data-role="label" data-picker-ui="1">
         <span class="pill-text" data-role="label-text" data-picker-ui="1"></span>
-        <button class="pill-lock" data-role="lock" title="Computed CSS" data-picker-ui="1">🔒</button>
       </div>
       <div class="action-group" data-picker-ui="1">
         <div class="action-btn generic" data-action="parent" title="Parent ▲" data-picker-ui="1">▲</div>
         <div class="action-btn generic" data-action="child"  title="Child ▼"  data-picker-ui="1">▼</div>
+        <div class="action-btn generic" data-action="css"    title="Computed Styles" data-picker-ui="1">ⓘ</div>
         <div class="action-btn generic" data-action="hide"   title="Hide ✕"   data-picker-ui="1">✕</div>
       </div>
     </div>
     <div class="picker-row" data-kind="specific" data-picker-ui="1">
       <div class="selector-pill specific" data-role="label" data-picker-ui="1">
         <span class="pill-text" data-role="label-text" data-picker-ui="1"></span>
-        <button class="pill-lock" data-role="lock" title="Computed CSS" data-picker-ui="1">🔒</button>
       </div>
       <div class="action-group" data-picker-ui="1">
         <div class="action-btn specific" data-action="prev" title="Prev ◀" data-picker-ui="1">◀</div>
         <div class="action-btn specific" data-action="next" title="Next ▶" data-picker-ui="1">▶</div>
+        <div class="action-btn specific" data-action="css"  title="Computed Styles" data-picker-ui="1">ⓘ</div>
         <div class="action-btn specific" data-action="hide" title="Hide ✕" data-picker-ui="1">✕</div>
       </div>
     </div>
@@ -322,6 +328,10 @@
   let pickMode = false;
   let locked = false;
   let lockedTarget = null;
+
+  // Keep overlay open when user explicitly taps/clicks the lock
+  let overlayPinned = false;
+  let lastOverlayKind = null; // 'generic' | 'specific'
 
   let activeTouchCount = 0;
   let lastTouchX = 0,
@@ -681,6 +691,12 @@
           locked = false;
           lockedTarget = null;
           hoverBox.classList.remove("locked");
+          // Unlocking should also clear any pinned overlay
+          overlayPinned = false;
+          lastOverlayKind = null;
+          clearAllCssButtonActive();
+          // Now we can safely hide
+          cssOverlay.style.display = "none";
         }
         updateVisuals();
       }
@@ -857,6 +873,7 @@
     const row = btn.closest(".picker-row");
     const kind = row?.getAttribute("data-kind");
     const action = btn.getAttribute("data-action");
+    if (action === "css") return; // handled by CSS overlay logic
     if (action === "hide") {
       const tgt = currentTarget();
       if (!tgt) return;
@@ -1098,20 +1115,40 @@
   }
   function showCssOverlayFor(kind) {
     if (!locked || !lockedTarget) return;
+    // Cancel any pending hide
+    if (cssOverlayHideTimer) {
+      clearTimeout(cssOverlayHideTimer);
+      cssOverlayHideTimer = null;
+    }
     const sel = kind === "generic" ? selectorGeneric : selectorSpecific;
     const cssCode = buildComputedCSSText(sel, lockedTarget);
     const codeEl = cssOverlay.querySelector(".css-ov-code");
     codeEl.textContent = cssCode;
-    const lockBtn = results.querySelector(
-      `.picker-row[data-kind="${kind}"] .pill-lock`
+    const cssBtn = results.querySelector(
+      `.picker-row[data-kind="${kind}"] .action-btn[data-action="css"]`
     );
-    if (lockBtn) {
-      const r = lockBtn.getBoundingClientRect();
+    if (cssBtn) {
+      const r = cssBtn.getBoundingClientRect();
       positionCssOverlayNear(r);
     }
   }
   function hideCssOverlay() {
+    // Don't auto-hide if the user pinned it open
+    if (overlayPinned) return;
     cssOverlay.style.display = "none";
+  }
+
+  // Button helpers for active state
+  function getCssBtn(kind){
+    return results.querySelector(`.picker-row[data-kind="${kind}"] .action-btn[data-action="css"]`);
+  }
+  function setCssButtonActive(kind, on){
+    const b = getCssBtn(kind);
+    if (b) b.classList.toggle('active', !!on);
+  }
+  function clearAllCssButtonActive(){
+    setCssButtonActive('generic', false);
+    setCssButtonActive('specific', false);
   }
 
   // copy in overlay
@@ -1130,6 +1167,8 @@
     });
   });
   cssOverlay.addEventListener("pointerleave", () => {
+    // If pinned, keep it open
+    if (overlayPinned) return;
     cssOverlayHideTimer = setTimeout(hideCssOverlay, 120);
   });
   cssOverlay.addEventListener("pointerenter", () => {
@@ -1139,14 +1178,16 @@
     }
   });
 
-  // Lock icon interactions (hover/tap)
+  // CSS button interactions (hover/tap)
   results.addEventListener("pointerover", (e) => {
-    const lockBtn = e.target.closest(".pill-lock");
-    if (!lockBtn) return;
-    const row = lockBtn.closest(".picker-row");
+    const cssBtn = e.target.closest('.action-btn[data-action="css"]');
+    if (!cssBtn) return;
+    const row = cssBtn.closest(".picker-row");
     const kind = row?.getAttribute("data-kind");
     if (!kind) return;
     if (!locked) return;
+    // If user pinned overlay, don't override content/visibility on hover
+    if (overlayPinned) return;
     if (cssOverlayHideTimer) {
       clearTimeout(cssOverlayHideTimer);
       cssOverlayHideTimer = null;
@@ -1154,26 +1195,54 @@
     showCssOverlayFor(kind);
   });
   results.addEventListener("pointerout", (e) => {
-    const lockBtn = e.target.closest(".pill-lock");
-    if (!lockBtn) return;
+    const cssBtn = e.target.closest('.action-btn[data-action="css"]');
+    if (!cssBtn) return;
+    // If pinned, keep it open
+    if (overlayPinned) return;
     if (cssOverlayHideTimer) {
       clearTimeout(cssOverlayHideTimer);
     }
     cssOverlayHideTimer = setTimeout(hideCssOverlay, 160);
   });
   results.addEventListener("click", (e) => {
-    const lockBtn = e.target.closest(".pill-lock");
-    if (!lockBtn) return;
+    const cssBtn = e.target.closest('.action-btn[data-action="css"]');
+    if (!cssBtn) return;
     e.preventDefault();
     e.stopPropagation();
-    const row = lockBtn.closest(".picker-row");
+    const row = cssBtn.closest(".picker-row");
     const kind = row?.getAttribute("data-kind");
     if (!kind) return;
     if (!locked) return;
-    const visible =
-      cssOverlay.style.display !== "none" && cssOverlay.style.display !== "";
-    if (visible) hideCssOverlay();
-    else showCssOverlayFor(kind);
+
+    // Toggle pinning. Clicking the other button swaps content while staying pinned.
+    if (!overlayPinned) {
+      overlayPinned = true;
+      lastOverlayKind = kind;
+      if (cssOverlayHideTimer) {
+        clearTimeout(cssOverlayHideTimer);
+        cssOverlayHideTimer = null;
+      }
+      clearAllCssButtonActive();
+      setCssButtonActive(kind, true);
+      showCssOverlayFor(kind);
+    } else {
+      if (lastOverlayKind === kind) {
+        overlayPinned = false;
+        lastOverlayKind = null;
+        clearAllCssButtonActive();
+        // Allow hiding now that it's unpinned
+        hideCssOverlay();
+      } else {
+        lastOverlayKind = kind;
+        if (cssOverlayHideTimer) {
+          clearTimeout(cssOverlayHideTimer);
+          cssOverlayHideTimer = null;
+        }
+        clearAllCssButtonActive();
+        setCssButtonActive(kind, true);
+        showCssOverlayFor(kind);
+      }
+    }
   });
 
   // ---------- snapping logic ----------
@@ -1373,6 +1442,10 @@
     results.classList.remove("locked");
     hoverBox.style.display = "none";
     clearMatches();
+    // Reset any pinned overlay when leaving/entering mode
+    overlayPinned = false;
+    lastOverlayKind = null;
+    clearAllCssButtonActive();
     hideCssOverlay();
     applyZoomPolicy();
   }
