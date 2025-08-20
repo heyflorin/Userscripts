@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         CSS Selector Picker (v1.21.6)
+// @name         CSS Selector Picker (v1.21.7)
 // @namespace    https://greasyfork.org/
 // @version      1.21.4
 // @description  A CSS selector picker for web pages, allowing you to select elements and generate useful CSS selectors on both Desktop and Mobile.
@@ -164,8 +164,10 @@
     .action-btn.generic{ border-color:var(--orange-bd); }
     .action-btn.specific{ border-color:var(--blue-bd); }
     /* Active state highlight for the CSS button */
-    .action-btn.generic.active{ background:var(--orange-bg); border-color:var(--orange-bd); }
-    .action-btn.specific.active{ background:var(--blue-bg); border-color:var(--blue-bd); }
+    .action-btn.generic.active{ background:var(--orange-bg)!important; border-color:var(--orange-bd)!important; }
+    .action-btn.specific.active{ background:var(--blue-bg)!important; border-color:var(--blue-bd)!important; }
+    /* Hide CSS info buttons until an element is locked */
+    .picker-results:not(.locked) .action-btn[data-action="css"]{ display:none!important; }
 
     /* Overlays (never block) */
     .picker-hover-box{
@@ -227,7 +229,7 @@
     }
     .picker-css-overlay .css-ov-header{
       display:flex; align-items:center; justify-content:space-between;
-      gap:8px; padding:10px 12px; background:rgba(255,255,255,.04);
+      gap:8px; padding:15px 17px; background:rgba(255,255,255,.04);
       border-bottom:1px solid rgba(255,255,255,.08);
       font-family:var(--font); font-weight:700; font-size:13px;
     }
@@ -868,12 +870,12 @@
   results.addEventListener("click", (e) => {
     const btn = e.target.closest(".action-btn");
     if (!btn) return;
-    e.preventDefault();
-    e.stopPropagation();
     const row = btn.closest(".picker-row");
     const kind = row?.getAttribute("data-kind");
     const action = btn.getAttribute("data-action");
-    if (action === "css") return; // handled by CSS overlay logic
+    if (action === "css") return; // let CSS overlay handler handle this click
+    e.preventDefault();
+    e.stopPropagation();
     if (action === "hide") {
       const tgt = currentTarget();
       if (!tgt) return;
@@ -1233,6 +1235,46 @@
         lastOverlayKind = null;
         clearAllCssButtonActive();
         // Allow hiding now that it's unpinned
+        hideCssOverlay();
+      } else {
+        lastOverlayKind = kind;
+        if (cssOverlayHideTimer) {
+          clearTimeout(cssOverlayHideTimer);
+          cssOverlayHideTimer = null;
+        }
+        clearAllCssButtonActive();
+        setCssButtonActive(kind, true);
+        showCssOverlayFor(kind);
+      }
+    }
+  });
+
+  // Ensure first tap opens overlay on touch/pen (without requiring a second tap)
+  results.addEventListener("pointerup", (e) => {
+    const cssBtn = e.target.closest('.action-btn[data-action="css"]');
+    if (!cssBtn) return;
+    if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const row = cssBtn.closest(".picker-row");
+    const kind = row?.getAttribute("data-kind");
+    if (!kind || !locked) return;
+
+    if (!overlayPinned) {
+      overlayPinned = true;
+      lastOverlayKind = kind;
+      if (cssOverlayHideTimer) {
+        clearTimeout(cssOverlayHideTimer);
+        cssOverlayHideTimer = null;
+      }
+      clearAllCssButtonActive();
+      setCssButtonActive(kind, true);
+      showCssOverlayFor(kind);
+    } else {
+      if (lastOverlayKind === kind) {
+        overlayPinned = false;
+        lastOverlayKind = null;
+        clearAllCssButtonActive();
         hideCssOverlay();
       } else {
         lastOverlayKind = kind;
