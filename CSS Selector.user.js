@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         CSS Selector Picker (v1.21.3)
+// @name         CSS Selector Picker (v1.21.4)
 // @namespace    https://greasyfork.org/
-// @version      1.21.2
-// @description  Circular grabber (⊹). Blocks pinch-zoom while picker ON (touch + trackpad). Disables page actions while ON. Mouse/touch copy. Drag-to-hover. During scroll, overlays hide and redraw after settle. Specific: ◀/▶ siblings, ✕ hide this. Generic: ▲ parent / ▼ child, ✕ hide all. ⌘⇧C toggles.
+// @version      1.21.4
+// @description  A CSS selector picker for web pages, allowing you to select elements and generate useful CSS selectors on both Desktop and Mobile.
 // @match        *://*/*
 // @run-at       document-end
 // @grant        GM_setClipboard
@@ -138,6 +138,9 @@
       border-radius:999px!important; font-weight:800; max-width:min(64vw,520px); min-width:0; overflow:hidden; text-overflow:ellipsis; text-align:left;
       box-shadow:0 3px 10px rgba(0,0,0,.10); outline:none; -webkit-user-select:none;
       pointer-events:auto;
+      /* overlay lock icon on the right inside the pill */
+      position:relative!important;
+      padding-right:calc(var(--pill-pad-x) + 28px)!important;
     }
     .selector-pill.generic{  background:var(--orange-bg); border:2px solid var(--orange-bd); color:var(--text-light); }
     .selector-pill.specific{ background:var(--blue-bg);   border:2px solid var(--blue-bd);   color:var(--text-light); }
@@ -196,6 +199,42 @@
       background:transparent; pointer-events:auto;
     }
     .picker-swipe-zone.disabled{ pointer-events:none; }
+    .selector-pill .pill-text{ display:block; overflow:hidden; text-overflow:ellipsis; }
+    .selector-pill .pill-lock{
+      position:absolute; right:8px; top:50%; transform:translateY(-50%);
+      width:20px; height:20px; border-radius:50%;
+      display:none; align-items:center; justify-content:center;
+      background:rgba(0,0,0,.28); color:#fff; border:1.5px solid rgba(255,255,255,.65);
+      font-size:12px; line-height:1; cursor:pointer; user-select:none;
+      pointer-events:auto;
+    }
+    .selector-pill.generic .pill-lock{ border-color:var(--orange-bd); }
+    .selector-pill.specific .pill-lock{ border-color:var(--blue-bd); }
+    .picker-results.locked .pill-lock{ display:flex; }
+
+    /* Computed CSS overlay */
+    .picker-css-overlay{
+      position:fixed; z-index:2147483650; max-width:min(72vw, 640px);
+      background:#101114; color:#f5f7fb; border:1px solid rgba(255,255,255,.15);
+      border-radius:10px; box-shadow:0 14px 40px rgba(0,0,0,.45);
+      font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      pointer-events:auto; overflow:hidden; display:none;
+    }
+    .picker-css-overlay .css-ov-header{
+      display:flex; align-items:center; justify-content:space-between;
+      gap:8px; padding:10px 12px; background:rgba(255,255,255,.04);
+      border-bottom:1px solid rgba(255,255,255,.08);
+      font-family:var(--font); font-weight:700; font-size:13px;
+    }
+    .picker-css-overlay .css-ov-title{ opacity:.85; }
+    .picker-css-overlay .css-ov-copy{
+      appearance:none; -webkit-appearance:none; border:none; outline:none;
+      background:#2b2f38; color:#fff; border:1px solid #1d2129;
+      padding:6px 9px; border-radius:8px; cursor:pointer; font-weight:700; font-size:12px;
+    }
+    .picker-css-overlay .css-ov-copy:active{ transform:translateY(1px); }
+    .picker-css-overlay pre{ margin:0; padding:12px 14px; overflow:auto; max-height:min(48vh, 520px); }
+    .picker-css-overlay code{ display:block; white-space:pre; }
   `);
 
   // ---------- UI ----------
@@ -204,7 +243,10 @@
   results.setAttribute("data-picker-ui", "1");
   results.innerHTML = `
     <div class="picker-row" data-kind="generic" data-picker-ui="1">
-      <div class="selector-pill generic" data-role="label" data-picker-ui="1"></div>
+      <div class="selector-pill generic" data-role="label" data-picker-ui="1">
+        <span class="pill-text" data-role="label-text" data-picker-ui="1"></span>
+        <button class="pill-lock" data-role="lock" title="Computed CSS" data-picker-ui="1">🔒</button>
+      </div>
       <div class="action-group" data-picker-ui="1">
         <div class="action-btn generic" data-action="parent" title="Parent ▲" data-picker-ui="1">▲</div>
         <div class="action-btn generic" data-action="child"  title="Child ▼"  data-picker-ui="1">▼</div>
@@ -212,7 +254,10 @@
       </div>
     </div>
     <div class="picker-row" data-kind="specific" data-picker-ui="1">
-      <div class="selector-pill specific" data-role="label" data-picker-ui="1"></div>
+      <div class="selector-pill specific" data-role="label" data-picker-ui="1">
+        <span class="pill-text" data-role="label-text" data-picker-ui="1"></span>
+        <button class="pill-lock" data-role="lock" title="Computed CSS" data-picker-ui="1">🔒</button>
+      </div>
       <div class="action-group" data-picker-ui="1">
         <div class="action-btn specific" data-action="prev" title="Prev ◀" data-picker-ui="1">◀</div>
         <div class="action-btn specific" data-action="next" title="Next ▶" data-picker-ui="1">▶</div>
@@ -245,6 +290,19 @@
   swipeZone.className = "picker-swipe-zone";
   swipeZone.setAttribute("data-picker-ui", "1");
   document.documentElement.appendChild(swipeZone);
+
+  // Computed CSS overlay
+  const cssOverlay = document.createElement("div");
+  cssOverlay.className = "picker-css-overlay";
+  cssOverlay.setAttribute("data-picker-ui", "1");
+  cssOverlay.innerHTML = `
+    <div class="css-ov-header" data-picker-ui="1">
+      <div class="css-ov-title" data-picker-ui="1">Computed CSS</div>
+      <button class="css-ov-copy" data-picker-ui="1" title="Copy CSS">Copy</button>
+    </div>
+    <pre data-picker-ui="1"><code class="css-ov-code" data-picker-ui="1"></code></pre>
+  `;
+  document.documentElement.appendChild(cssOverlay);
 
   // Hide rules style
   const hideStyle = document.createElement("style");
@@ -506,19 +564,21 @@
     selectorSpecific = buildSpecific(el);
   }
   function updateResultsUI(targetEl) {
-    const gEl = results.querySelector(
-      '.picker-row[data-kind="generic"]  [data-role="label"]'
+    const gText = results.querySelector(
+      '.picker-row[data-kind="generic"] [data-role="label"] .pill-text'
     );
-    const sEl = results.querySelector(
-      '.picker-row[data-kind="specific"] [data-role="label"]'
+    const sText = results.querySelector(
+      '.picker-row[data-kind="specific"] [data-role="label"] .pill-text'
     );
     if (!targetEl) {
       results.style.display = "none";
+      results.classList.remove("locked");
       return;
     }
-    gEl.textContent = trim(selectorGeneric, PILL_MAX_CHARS);
-    sEl.textContent = trim(selectorSpecific, PILL_MAX_CHARS);
+    gText.textContent = trim(selectorGeneric, PILL_MAX_CHARS);
+    sText.textContent = trim(selectorSpecific, PILL_MAX_CHARS);
     results.style.display = "flex";
+    results.classList.toggle("locked", !!locked);
   }
   function updateVisuals() {
     const tgt = currentTarget();
@@ -526,6 +586,7 @@
       results.style.display = pickMode ? "flex" : "none";
       hoverBox.style.display = "none";
       clearMatches();
+      hideCssOverlay();
       return;
     }
     drawHighlightsFor(tgt, selectorGeneric);
@@ -729,8 +790,8 @@
       else if (action === "child") target = firstValidChild(base);
     }
 
-    const pill = results.querySelector(
-      `.picker-row[data-kind="${kind}"] [data-role="label"]`
+    const labelText = results.querySelector(
+      `.picker-row[data-kind="${kind}"] [data-role="label"] .pill-text`
     );
     if (validElement(target)) {
       setLockedTarget(target);
@@ -744,11 +805,11 @@
           ? "No prev sibling"
           : "No next sibling";
       const restore = kind === "generic" ? selectorGeneric : selectorSpecific;
-      if (pill) {
+      if (labelText) {
         const r = restore;
-        pill.textContent = msg;
+        labelText.textContent = msg;
         setTimeout(() => {
-          pill.textContent = trim(r, PILL_MAX_CHARS);
+          labelText.textContent = trim(r, PILL_MAX_CHARS);
         }, 900);
       }
     }
@@ -757,16 +818,19 @@
   // copy on pill click (mouse + touch + pen)
   const copyFromPill = async (pillEl) => {
     const row = pillEl.closest(".picker-row");
+    const labelText = pillEl.querySelector(".pill-text");
     const kind = row?.getAttribute("data-kind");
     const full = kind === "generic" ? selectorGeneric : selectorSpecific;
     await copyText(full);
     const restore = full;
-    pillEl.textContent = "Copied";
+    labelText.textContent = "Copied";
     setTimeout(() => {
-      pillEl.textContent = trim(restore, PILL_MAX_CHARS);
+      labelText.textContent = trim(restore, PILL_MAX_CHARS);
     }, 900);
   };
   results.addEventListener("click", (e) => {
+    if (e.target.closest(".pill-lock") || e.target.closest(".action-btn"))
+      return; // ignore lock/action clicks
     const pillEl = e.target.closest(".selector-pill");
     if (!pillEl) return;
     e.preventDefault();
@@ -774,6 +838,8 @@
     copyFromPill(pillEl);
   });
   results.addEventListener("pointerup", (e) => {
+    if (e.target.closest(".pill-lock") || e.target.closest(".action-btn"))
+      return; // ignore lock/action taps
     const pillEl = e.target.closest(".selector-pill");
     if (!pillEl) return;
     e.preventDefault();
@@ -798,17 +864,315 @@
           ? selectorSpecific || buildSpecific(tgt)
           : selectorGeneric || buildGeneric(tgt);
       addHideRule(sel);
-      const pill = row.querySelector(".selector-pill");
-      if (pill) {
+      const labelText = row.querySelector(".pill-text");
+      if (labelText) {
         const r = sel;
-        pill.textContent = "Hidden";
+        labelText.textContent = "Hidden";
         setTimeout(() => {
-          pill.textContent = trim(r, PILL_MAX_CHARS);
+          labelText.textContent = trim(r, PILL_MAX_CHARS);
         }, 900);
       }
       return;
     }
     traverse(kind, action);
+  });
+
+  // ---------- Computed CSS utilities ----------
+  const CSS_PROP_WHITELIST = [
+    "display",
+    "position",
+    "top",
+    "right",
+    "bottom",
+    "left",
+    "z-index",
+    "box-sizing",
+    "width",
+    "height",
+    "min-width",
+    "min-height",
+    "max-width",
+    "max-height",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
+    "padding-top",
+    "padding-right",
+    "padding-bottom",
+    "padding-left",
+    "border-top-width",
+    "border-right-width",
+    "border-bottom-width",
+    "border-left-width",
+    "border-top-style",
+    "border-right-style",
+    "border-bottom-style",
+    "border-left-style",
+    "border-top-color",
+    "border-right-color",
+    "border-bottom-color",
+    "border-left-color",
+    "border-radius",
+    "outline-width",
+    "outline-style",
+    "outline-color",
+    "background-color",
+    "background-image",
+    "background-repeat",
+    "background-position",
+    "background-size",
+    "background-attachment",
+    "background-clip",
+    "background-origin",
+    "color",
+    "opacity",
+    "visibility",
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "font-variant",
+    "line-height",
+    "letter-spacing",
+    "word-spacing",
+    "text-align",
+    "text-transform",
+    "text-decoration-line",
+    "text-decoration-color",
+    "text-decoration-style",
+    "text-decoration-thickness",
+    "white-space",
+    "vertical-align",
+    "overflow",
+    "overflow-x",
+    "overflow-y",
+    "pointer-events",
+    "cursor",
+    "box-shadow",
+    "transform",
+    "transform-origin",
+    "transform-style",
+    "perspective",
+    "perspective-origin",
+    "backface-visibility",
+    "transition-property",
+    "transition-duration",
+    "transition-timing-function",
+    "transition-delay",
+    "filter",
+    "mix-blend-mode",
+    "isolation",
+    "flex",
+    "flex-grow",
+    "flex-shrink",
+    "flex-basis",
+    "flex-direction",
+    "flex-wrap",
+    "align-items",
+    "align-self",
+    "align-content",
+    "justify-content",
+    "justify-items",
+    "justify-self",
+    "gap",
+    "row-gap",
+    "column-gap",
+    "grid-template-columns",
+    "grid-template-rows",
+    "grid-template-areas",
+    "grid-auto-columns",
+    "grid-auto-rows",
+    "grid-auto-flow",
+    "place-items",
+    "place-content",
+    "place-self",
+    "contain",
+    "content",
+    "will-change",
+  ];
+  const TRIVIAL_BY_VALUE = new Set([
+    "",
+    "none",
+    "normal",
+    "auto",
+    "0",
+    "0px",
+    "0s",
+    "0ms",
+    "rgba(0, 0, 0, 0)",
+  ]);
+  function isTrivial(prop, val) {
+    const v = String(val).trim();
+    if (TRIVIAL_BY_VALUE.has(v)) {
+      // allow certain zeros to show if they matter
+      if (
+        v === "0px" &&
+        /margin|padding|border-.*-width|outline-width/.test(prop)
+      )
+        return false;
+      if (v === "0" && /(opacity)/.test(prop)) return false;
+      return true;
+    }
+    if (prop.startsWith("-")) return true; // vendor
+    if (
+      prop.includes("transition") &&
+      (v === "all 0s ease 0s" || v === "0s ease 0s")
+    )
+      return true;
+    if (/^border-.*-style$/.test(prop) && v === "none") return true;
+    if (/^border-.*-width$/.test(prop) && (v === "0px" || v === "0"))
+      return true;
+    if (/^outline-/.test(prop) && (v === "none" || v === "0px")) return true;
+    if (
+      (prop === "box-shadow" ||
+        prop === "text-decoration-line" ||
+        prop === "background-image" ||
+        prop === "filter" ||
+        prop === "transform") &&
+      v === "none"
+    )
+      return true;
+    return false;
+  }
+  function buildComputedCSSText(sel, el) {
+    try {
+      const cs = getComputedStyle(el);
+      const lines = [];
+      for (const prop of CSS_PROP_WHITELIST) {
+        const val = cs.getPropertyValue(prop);
+        if (!isTrivial(prop, val)) lines.push(`  ${prop}: ${val};`);
+      }
+      // If nothing made it through, fall back to a minimal useful subset
+      if (!lines.length) {
+        const fallback = [
+          "display",
+          "position",
+          "width",
+          "height",
+          "margin-top",
+          "margin-right",
+          "margin-bottom",
+          "margin-left",
+          "padding-top",
+          "padding-right",
+          "padding-bottom",
+          "padding-left",
+          "color",
+          "background-color",
+          "font-size",
+          "font-weight",
+          "line-height",
+        ];
+        for (const p of fallback) {
+          const v = cs.getPropertyValue(p);
+          if (v && !TRIVIAL_BY_VALUE.has(v)) lines.push(`  ${p}: ${v};`);
+        }
+      }
+      return `${sel} {\n${lines.join("\n")}\n}`;
+    } catch (_) {
+      return `${sel} {\n  /* unable to compute styles */\n}`;
+    }
+  }
+
+  let cssOverlayHideTimer = null;
+  function positionCssOverlayNear(rect) {
+    cssOverlay.style.display = "block";
+    cssOverlay.style.visibility = "hidden";
+    // initial paint to measure
+    const pad = 8;
+    const wantBelow = window.innerHeight - rect.bottom >= 160; // enough space below
+    const topCand = wantBelow
+      ? rect.bottom + 8
+      : Math.max(8, rect.top - cssOverlay.offsetHeight - 8);
+    let left = Math.min(
+      Math.max(8, rect.right - cssOverlay.offsetWidth),
+      Math.max(8, window.innerWidth - cssOverlay.offsetWidth - 8)
+    );
+    if (!isFinite(left))
+      left = Math.max(8, Math.min(rect.left, window.innerWidth - 320));
+    cssOverlay.style.left = `${Math.round(left)}px`;
+    cssOverlay.style.top = `${Math.round(topCand)}px`;
+    cssOverlay.style.visibility = "visible";
+  }
+  function showCssOverlayFor(kind) {
+    if (!locked || !lockedTarget) return;
+    const sel = kind === "generic" ? selectorGeneric : selectorSpecific;
+    const cssCode = buildComputedCSSText(sel, lockedTarget);
+    const codeEl = cssOverlay.querySelector(".css-ov-code");
+    codeEl.textContent = cssCode;
+    const lockBtn = results.querySelector(
+      `.picker-row[data-kind="${kind}"] .pill-lock`
+    );
+    if (lockBtn) {
+      const r = lockBtn.getBoundingClientRect();
+      positionCssOverlayNear(r);
+    }
+  }
+  function hideCssOverlay() {
+    cssOverlay.style.display = "none";
+  }
+
+  // copy in overlay
+  cssOverlay.addEventListener("click", (e) => {
+    const btn = e.target.closest(".css-ov-copy");
+    if (!btn) return;
+    const code = cssOverlay.querySelector(".css-ov-code")?.textContent || "";
+    e.preventDefault();
+    e.stopPropagation();
+    copyText(code).then(() => {
+      const prev = btn.textContent;
+      btn.textContent = "Copied";
+      setTimeout(() => {
+        btn.textContent = prev;
+      }, 900);
+    });
+  });
+  cssOverlay.addEventListener("pointerleave", () => {
+    cssOverlayHideTimer = setTimeout(hideCssOverlay, 120);
+  });
+  cssOverlay.addEventListener("pointerenter", () => {
+    if (cssOverlayHideTimer) {
+      clearTimeout(cssOverlayHideTimer);
+      cssOverlayHideTimer = null;
+    }
+  });
+
+  // Lock icon interactions (hover/tap)
+  results.addEventListener("pointerover", (e) => {
+    const lockBtn = e.target.closest(".pill-lock");
+    if (!lockBtn) return;
+    const row = lockBtn.closest(".picker-row");
+    const kind = row?.getAttribute("data-kind");
+    if (!kind) return;
+    if (!locked) return;
+    if (cssOverlayHideTimer) {
+      clearTimeout(cssOverlayHideTimer);
+      cssOverlayHideTimer = null;
+    }
+    showCssOverlayFor(kind);
+  });
+  results.addEventListener("pointerout", (e) => {
+    const lockBtn = e.target.closest(".pill-lock");
+    if (!lockBtn) return;
+    if (cssOverlayHideTimer) {
+      clearTimeout(cssOverlayHideTimer);
+    }
+    cssOverlayHideTimer = setTimeout(hideCssOverlay, 160);
+  });
+  results.addEventListener("click", (e) => {
+    const lockBtn = e.target.closest(".pill-lock");
+    if (!lockBtn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const row = lockBtn.closest(".picker-row");
+    const kind = row?.getAttribute("data-kind");
+    if (!kind) return;
+    if (!locked) return;
+    const visible =
+      cssOverlay.style.display !== "none" && cssOverlay.style.display !== "";
+    if (visible) hideCssOverlay();
+    else showCssOverlayFor(kind);
   });
 
   // ---------- snapping logic ----------
@@ -960,6 +1324,7 @@
       scrolling = true;
       hoverBox.style.display = "none";
       clearMatches();
+      hideCssOverlay();
       // keep pills visible so you can still act; hide them too if you prefer:
       // results.style.display = 'none';
     }
@@ -1004,8 +1369,10 @@
     selectorGeneric = "";
     selectorSpecific = "";
     results.style.display = "none";
+    results.classList.remove("locked");
     hoverBox.style.display = "none";
     clearMatches();
+    hideCssOverlay();
     applyZoomPolicy();
   }
 
