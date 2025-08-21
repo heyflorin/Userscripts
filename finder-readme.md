@@ -91,11 +91,15 @@ Function that determines if an id name may be used in a selector. Defaults to a 
 
 ### seedMinLength
 
-Minimum length of levels in fining selector. Defaults to `3`.
+Minimum length of levels in fining selector. Defaults to `1`.
 
 ### optimizedMinLength
 
-Minimum length for optimising selector. Defaults to `2`.
+Minimum length for optimising selector. Defaults to `1`.
+
+### skipEmpty
+
+Skip plain `div` ancestors without attributes when searching for selectors. Defaults to `true`.
 
 ## License
 
