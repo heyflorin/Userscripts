@@ -787,6 +787,173 @@
         return score;
       }
       
+      // Helper function to detect overly broad/common tags
+      function isOverlyBroadTag(tag) {
+        const broadTags = ['div', 'span', 'p', 'a', 'li', 'td', 'th', 'tr', 'img', 'input', 'button'];
+        return broadTags.includes(tag);
+      }
+      
+      // Helper function to build a more constrained generic selector when tag-only is too broad
+      function buildConstrainedGenericSelector(element) {
+        const tag = element.tagName.toLowerCase();
+        const signature = getSemanticSignature(element);
+        
+        // Strategy 1: Try element's own semantic classes
+        if (signature.classes.length > 0) {
+          for (let i = 0; i < Math.min(signature.classes.length, 2); i++) {
+            const classSelector = `${tag}.${CSS.escape(signature.classes[i])}`;
+            try {
+              const matches = document.querySelectorAll(classSelector);
+              if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+                return classSelector;
+              }
+            } catch(_) {}
+          }
+          
+          // Try multiple classes combined
+          if (signature.classes.length > 1) {
+            const multiClassSelector = `${tag}.${signature.classes.slice(0, 2).map(c => CSS.escape(c)).join('.')}`;
+            try {
+              const matches = document.querySelectorAll(multiClassSelector);
+              if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+                return multiClassSelector;
+              }
+            } catch(_) {}
+          }
+        }
+        
+        // Strategy 2: Try element's semantic data attributes
+        if (signature.dataAttrs.length > 0) {
+          for (const attr of signature.dataAttrs) {
+            const attrSelector = `${tag}[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`;
+            try {
+              const matches = document.querySelectorAll(attrSelector);
+              if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+                return attrSelector;
+              }
+            } catch(_) {}
+          }
+        }
+        
+        // Strategy 3: Try role or aria attributes
+        if (signature.roles.length > 0) {
+          for (const role of signature.roles) {
+            const roleSelector = `${tag}[${CSS.escape(role.name)}="${CSS.escape(role.value)}"]`;
+            try {
+              const matches = document.querySelectorAll(roleSelector);
+              if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+                return roleSelector;
+              }
+            } catch(_) {}
+          }
+        }
+        
+        // Strategy 4: Try parent context with current element's first class
+        if (signature.classes.length > 0) {
+          const parent = element.parentElement;
+          if (parent) {
+            const parentSelector = getMinimalContainerSelector(parent);
+            if (parentSelector) {
+              const contextSelector = `${parentSelector} ${tag}.${CSS.escape(signature.classes[0])}`;
+              try {
+                const matches = document.querySelectorAll(contextSelector);
+                if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+                  return contextSelector;
+                }
+              } catch(_) {}
+            }
+          }
+        }
+        
+        // Strategy 5: Try positional selectors within parent (but avoid nth-child if possible)
+        const parent = element.parentElement;
+        if (parent) {
+          const parentSelector = getMinimalContainerSelector(parent);
+          if (parentSelector) {
+            // Try first/last child if applicable
+            const siblings = Array.from(parent.children).filter(c => c.tagName === element.tagName);
+            if (siblings.length > 1) {
+              const elementIndex = siblings.indexOf(element);
+              if (elementIndex === 0) {
+                const firstChildSelector = `${parentSelector} ${tag}:first-child`;
+                try {
+                  const matches = document.querySelectorAll(firstChildSelector);
+                  if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+                    return firstChildSelector;
+                  }
+                } catch(_) {}
+              } else if (elementIndex === siblings.length - 1) {
+                const lastChildSelector = `${parentSelector} ${tag}:last-child`;
+                try {
+                  const matches = document.querySelectorAll(lastChildSelector);
+                  if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+                    return lastChildSelector;
+                  }
+                } catch(_) {}
+              }
+            }
+          }
+        }
+        
+        // Strategy 6: Use content pattern matching for similar content
+        if (signature.contentPattern) {
+          // Find elements with similar content patterns
+          const allElements = document.querySelectorAll(tag);
+          const similarElements = Array.from(allElements).filter(el => {
+            const elSignature = getSemanticSignature(el);
+            return elSignature.contentPattern === signature.contentPattern;
+          });
+          
+          if (similarElements.length >= MIN_MATCHES_TARGET && similarElements.length <= MAX_MATCHES_TARGET) {
+            // Try to find a common parent or pattern
+            const commonParents = new Map();
+            similarElements.forEach(el => {
+              let parent = el.parentElement;
+              while (parent && parent !== document.body) {
+                const parentSignature = getSemanticSignature(parent);
+                if (parentSignature.classes.length > 0) {
+                  const key = `${parent.tagName.toLowerCase()}.${parentSignature.classes[0]}`;
+                  commonParents.set(key, (commonParents.get(key) || 0) + 1);
+                  break;
+                }
+                parent = parent.parentElement;
+              }
+            });
+            
+            // Find the most common parent pattern
+            for (const [parentPattern, count] of commonParents.entries()) {
+              if (count >= Math.ceil(similarElements.length * 0.7)) {
+                const contentBasedSelector = `${parentPattern} ${tag}`;
+                try {
+                  const matches = document.querySelectorAll(contentBasedSelector);
+                  if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+                    return contentBasedSelector;
+                  }
+                } catch(_) {}
+              }
+            }
+          }
+        }
+        
+        // Last resort: Use finder but remove positional selectors to make it more generic
+        try {
+          let finderResult = finder(element);
+          // Remove nth-child and nth-of-type to make it more generic
+          const genericified = finderResult.replace(/:nth-(child|of-type)\(\d+\)/g, '');
+          const matches = document.querySelectorAll(genericified);
+          if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+            return genericified;
+          }
+        } catch(_) {}
+        
+        // Absolute last resort: return the specific selector as it's better than an overly broad one
+        try {
+          return finder(element);
+        } catch(_) {
+          return tag; // Even if it's broad, we need to return something
+        }
+      }
+      
       // Main algorithm: build generic selector
       const containerInfo = findSemanticContainer(el);
       
@@ -807,6 +974,12 @@
             return selector;
           }
         } catch(_) {}
+        
+        // Check if tag-only would be too broad
+        const tagOnlyMatches = document.querySelectorAll(tag).length;
+        if (tagOnlyMatches > MAX_MATCHES_TARGET || isOverlyBroadTag(tag)) {
+          return buildConstrainedGenericSelector(el);
+        }
         
         // Ultimate fallback
         return tag;
@@ -861,7 +1034,14 @@
         
       } catch(_) {}
       
-      // Fallback to tag-only
+      // Before falling back to tag-only, check if it's too broad
+      const tagOnlyMatches = document.querySelectorAll(targetTag).length;
+      if (tagOnlyMatches > MAX_MATCHES_TARGET || isOverlyBroadTag(targetTag)) {
+        // Try to build a more specific selector using element's own attributes
+        return buildConstrainedGenericSelector(el);
+      }
+      
+      // Fallback to tag-only if it's reasonable
       return targetTag;
       
     } catch (err) {
