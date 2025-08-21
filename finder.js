@@ -2,6 +2,33 @@
 // Author: Anton Medvedev <anton@medv.io>
 // Source: https://github.com/antonmedv/finder
 const acceptedAttrNames = new Set(['role', 'name', 'aria-label', 'rel', 'href']);
+const semanticTags = new Set([
+    'article',
+    'section',
+    'nav',
+    'header',
+    'main',
+    'footer',
+    'aside',
+    'figure',
+    'figcaption',
+    'p',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'ul',
+    'ol',
+    'li',
+    'form',
+    'label',
+    'button',
+    'input',
+    'textarea',
+    'select',
+]);
 /** Check if attribute name and value are word-like. */
 export function attr(name, value) {
     let nameIsOk = acceptedAttrNames.has(name);
@@ -131,6 +158,8 @@ function wordLike(name) {
 }
 function tie(element, config) {
     const level = [];
+    const tagName = element.tagName.toLowerCase();
+    const isSemantic = semanticTags.has(tagName);
     const elementId = element.getAttribute('id');
     if (elementId && config.idName(elementId)) {
         level.push({
@@ -141,9 +170,14 @@ function tie(element, config) {
     for (let i = 0; i < element.classList.length; i++) {
         const name = element.classList[i];
         if (config.className(name)) {
+            const cls = '.' + CSS.escape(name);
             level.push({
-                name: '.' + CSS.escape(name),
+                name: cls,
                 penalty: 1,
+            });
+            level.push({
+                name: `${tagName}${cls}`,
+                penalty: isSemantic ? 2 : 5,
             });
         }
     }
@@ -156,19 +190,18 @@ function tie(element, config) {
             });
         }
     }
-    const tagName = element.tagName.toLowerCase();
-    if (config.tagName(tagName)) {
+    if (isSemantic && config.tagName(tagName)) {
         level.push({
             name: tagName,
-            penalty: 5,
+            penalty: 3,
         });
-        const index = indexOf(element, tagName);
-        if (index !== undefined) {
-            level.push({
-                name: nthOfType(tagName, index),
-                penalty: 10,
-            });
-        }
+    }
+    const index = indexOf(element, tagName);
+    if (index !== undefined) {
+        level.push({
+            name: nthOfType(tagName, index),
+            penalty: isSemantic ? 10 : 15,
+        });
     }
     const nth = indexOf(element);
     if (nth !== undefined) {

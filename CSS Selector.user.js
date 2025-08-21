@@ -115,6 +115,33 @@
     // Author: Anton Medvedev <anton@medv.io>
     // Source: https://github.com/antonmedv/finder
     const acceptedAttrNames = new Set(['role', 'name', 'aria-label', 'rel', 'href']);
+    const semanticTags = new Set([
+        'article',
+        'section',
+        'nav',
+        'header',
+        'main',
+        'footer',
+        'aside',
+        'figure',
+        'figcaption',
+        'p',
+        'h1',
+        'h2',
+        'h3',
+        'h4',
+        'h5',
+        'h6',
+        'ul',
+        'ol',
+        'li',
+        'form',
+        'label',
+        'button',
+        'input',
+        'textarea',
+        'select',
+    ]);
     /** Check if attribute name and value are word-like. */
     function attr(name, value) {
         let nameIsOk = acceptedAttrNames.has(name);
@@ -231,6 +258,8 @@
     }
     function tie(element, config) {
         const level = [];
+        const tagName = element.tagName.toLowerCase();
+        const isSemantic = semanticTags.has(tagName);
         const elementId = element.getAttribute('id');
         if (elementId && config.idName(elementId)) {
             level.push({
@@ -241,9 +270,14 @@
         for (let i = 0; i < element.classList.length; i++) {
             const name = element.classList[i];
             if (config.className(name)) {
+                const cls = '.' + CSS.escape(name);
                 level.push({
-                    name: '.' + CSS.escape(name),
+                    name: cls,
                     penalty: 1,
+                });
+                level.push({
+                    name: `${tagName}${cls}`,
+                    penalty: isSemantic ? 2 : 5,
                 });
             }
         }
@@ -256,19 +290,18 @@
                 });
             }
         }
-        const tagName = element.tagName.toLowerCase();
-        if (config.tagName(tagName)) {
+        if (isSemantic && config.tagName(tagName)) {
             level.push({
                 name: tagName,
-                penalty: 5,
+                penalty: 3,
             });
-            const index = indexOf(element, tagName);
-            if (index !== undefined) {
-                level.push({
-                    name: nthOfType(tagName, index),
-                    penalty: 10,
-                });
-            }
+        }
+        const index = indexOf(element, tagName);
+        if (index !== undefined) {
+            level.push({
+                name: nthOfType(tagName, index),
+                penalty: isSemantic ? 10 : 15,
+            });
         }
         const nth = indexOf(element);
         if (nth !== undefined) {
@@ -636,6 +669,8 @@
   let hoveredTarget = null;
   let selectorGeneric = "";
   let selectorSpecific = "";
+  let computeSelectorsTimeout = 0;
+  const DEBOUNCE_MS = 250;
 
   // hover RAF
   let rafScheduledHover = false,
@@ -718,8 +753,16 @@
   // ---------- selection & UI updates ----------
   const currentTarget = () => (locked ? lockedTarget : hoveredTarget);
   function computeSelectorsFor(el) {
-    selectorGeneric = buildGeneric(el);
-    selectorSpecific = buildSpecific(el);
+    selectorGeneric = "";
+    selectorSpecific = "";
+    results.style.display = "none";
+    if (computeSelectorsTimeout) clearTimeout(computeSelectorsTimeout);
+    computeSelectorsTimeout = setTimeout(() => {
+      if (!(el instanceof Element)) return;
+      selectorGeneric = buildGeneric(el);
+      selectorSpecific = buildSpecific(el);
+      updateVisuals();
+    }, DEBOUNCE_MS);
   }
   function updateResultsUI(targetEl) {
     const gText = results.querySelector(
@@ -755,7 +798,6 @@
     locked = true;
     lockedTarget = el;
     computeSelectorsFor(el);
-    updateVisuals();
     return true;
   }
 
@@ -795,7 +837,6 @@
         }
         hoveredTarget = target;
         computeSelectorsFor(target);
-        updateVisuals();
       });
     }
   }
