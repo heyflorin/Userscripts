@@ -37,9 +37,10 @@ export function finder(input, options) {
         tagName: tagName,
         attr: attr,
         timeoutMs: 1000,
-        seedMinLength: 3,
-        optimizedMinLength: 2,
+        seedMinLength: 1,
+        optimizedMinLength: 1,
         maxNumberOfPathChecks: Infinity,
+        skipEmpty: true,
     };
     const startTime = new Date();
     const config = { ...defaults, ...options };
@@ -80,6 +81,11 @@ function* search(input, config, rootDocument) {
     let current = input;
     let i = 0;
     while (current && current !== rootDocument) {
+        if (i !== 0 && config.skipEmpty && isEmpty(current)) {
+            current = current.parentElement;
+            i++;
+            continue;
+        }
         const level = tie(current, config);
         for (const node of level) {
             node.level = i;
@@ -100,6 +106,13 @@ function* search(input, config, rootDocument) {
     for (const candidate of paths) {
         yield candidate;
     }
+}
+
+function isEmpty(element) {
+    return element.tagName.toLowerCase() === 'div'
+        && !element.id
+        && element.classList.length === 0
+        && element.attributes.length === 0;
 }
 function wordLike(name) {
     if (/^[a-z\-]{3,}$/i.test(name)) {
