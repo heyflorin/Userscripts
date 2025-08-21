@@ -95,7 +95,7 @@
       : (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, (ch) => "\\" + ch);
   const PILL_MAX_CHARS = 100;
   const trim = (s, n = PILL_MAX_CHARS) => {
-    if (s == null) return "";
+    if (s == null || s === undefined) return "";
     const str = String(s);
     return str.length <= n ? str : str.slice(0, n - 1) + "…";
   };
@@ -765,7 +765,10 @@
     
     // Check cache first
     if (selectorCache.has(el)) {
-      return selectorCache.get(el).generic;
+      const cached = selectorCache.get(el);
+      if (cached && cached.generic && typeof cached.generic === 'string') {
+        return cached.generic;
+      }
     }
     
     try {
@@ -1111,7 +1114,10 @@
     
     // Check cache first
     if (selectorCache.has(el)) {
-      return selectorCache.get(el).specific;
+      const cached = selectorCache.get(el);
+      if (cached && cached.specific && typeof cached.specific === 'string') {
+        return cached.specific;
+      }
     }
     
     try {
@@ -1297,6 +1303,14 @@
       selectorGeneric = buildGeneric(el);
       selectorSpecific = buildSpecific(el);
       
+      // Ensure selectors are never undefined - add fallback safety
+      if (!selectorGeneric || typeof selectorGeneric !== 'string') {
+        selectorGeneric = el.tagName.toLowerCase();
+      }
+      if (!selectorSpecific || typeof selectorSpecific !== 'string') {
+        selectorSpecific = el.tagName.toLowerCase();
+      }
+      
       // Update cache with both selectors
       selectorCache.set(el, { 
         generic: selectorGeneric, 
@@ -1307,6 +1321,14 @@
     // Ensure generic and specific selectors are different
     ensureSelectorDiversity(el);
     
+    // Final safety check before caching
+    if (!selectorGeneric || typeof selectorGeneric !== 'string') {
+      selectorGeneric = el.tagName.toLowerCase();
+    }
+    if (!selectorSpecific || typeof selectorSpecific !== 'string') {
+      selectorSpecific = el.tagName.toLowerCase();
+    }
+    
     // Update cache with final selectors
     selectorCache.set(el, { 
       generic: selectorGeneric, 
@@ -1315,6 +1337,14 @@
   }
   
   function ensureSelectorDiversity(el) {
+    // Safety check - ensure selectors are strings
+    if (!selectorGeneric || typeof selectorGeneric !== 'string') {
+      selectorGeneric = el.tagName.toLowerCase();
+    }
+    if (!selectorSpecific || typeof selectorSpecific !== 'string') {
+      selectorSpecific = el.tagName.toLowerCase();
+    }
+    
     // Quick exit if selectors are already different
     if (selectorGeneric !== selectorSpecific) return;
     
@@ -1460,10 +1490,14 @@
       results.style.display = "none";
       results.classList.remove("locked");
       return;
-    } else
+    }
     
-    uiElements.genericText.textContent = trim(selectorGeneric, PILL_MAX_CHARS);
-    uiElements.specificText.textContent = trim(selectorSpecific, PILL_MAX_CHARS);
+    // Ensure selectors are never undefined with fallback
+    const safeGeneric = selectorGeneric || targetEl.tagName.toLowerCase();
+    const safeSpecific = selectorSpecific || targetEl.tagName.toLowerCase();
+    
+    uiElements.genericText.textContent = trim(safeGeneric, PILL_MAX_CHARS);
+    uiElements.specificText.textContent = trim(safeSpecific, PILL_MAX_CHARS);
     results.style.display = "flex";
     results.classList.toggle("locked", !!locked);
   }
@@ -1476,7 +1510,9 @@
       hideCssOverlay();
       return;
     }
-    drawHighlightsFor(tgt, selectorGeneric);
+    // Ensure we have a valid selector before drawing highlights
+    const safeSelectorGeneric = selectorGeneric || tgt.tagName.toLowerCase();
+    drawHighlightsFor(tgt, safeSelectorGeneric);
     updateResultsUI(tgt);
   }
   function setLockedTarget(el) {
@@ -1697,7 +1733,7 @@
           : action === "prev"
           ? "No prev sibling"
           : "No next sibling";
-      const restore = kind === "generic" ? selectorGeneric : selectorSpecific;
+      const restore = kind === "generic" ? (selectorGeneric || "*") : (selectorSpecific || "*");
       if (labelText) {
         const r = restore;
         labelText.textContent = msg;
@@ -1713,7 +1749,7 @@
     const row = pillEl.closest(".picker-row");
     const labelText = pillEl.querySelector(".pill-text");
     const kind = row?.getAttribute("data-kind");
-    const full = kind === "generic" ? selectorGeneric : selectorSpecific;
+    const full = kind === "generic" ? (selectorGeneric || "*") : (selectorSpecific || "*");
     await copyText(full);
     const restore = full;
     labelText.textContent = "Copied";
@@ -1996,7 +2032,7 @@
       clearTimeout(cssOverlayHideTimer);
       cssOverlayHideTimer = null;
     }
-    const sel = kind === "generic" ? selectorGeneric : selectorSpecific;
+    const sel = kind === "generic" ? (selectorGeneric || "*") : (selectorSpecific || "*");
     const cssCode = buildComputedCSSText(sel, lockedTarget);
     const codeEl = cssOverlay.querySelector(".css-ov-code");
     codeEl.textContent = cssCode;
