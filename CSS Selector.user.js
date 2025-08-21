@@ -407,7 +407,8 @@
 
   // ---------- styles ----------
   addStyle(`
-    :root{
+    /* Scoped root for picker variables */
+    #css-selector-picker-root{
       --pill-h: 46px;
       --pill-pad-x: 16px;
       --font: -apple-system, BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
@@ -423,9 +424,8 @@
       --grabber-bd:#111;
       --grabber-fg:#fff;
     }
-    [data-picker-ui="1"]{ }
 
-    .selector-pill{
+    #css-selector-picker-root .selector-pill{
       height:var(--pill-h)!important; padding:0 var(--pill-pad-x)!important;
       font-family:var(--font)!important; font-size:var(--font-size)!important; line-height:1!important;
       box-sizing:border-box!important; display:inline-flex!important; align-items:center!important; justify-content:flex-start!important;
@@ -433,21 +433,20 @@
       border-radius:999px!important; font-weight:800; max-width:min(64vw,520px); min-width:0; overflow:hidden; text-overflow:ellipsis; text-align:left;
       box-shadow:0 3px 10px rgba(0,0,0,.10); outline:none; -webkit-user-select:none;
       pointer-events:auto;
-      /* overlay lock icon on the right inside the pill */
       position:relative !important;
     }
-    .selector-pill.generic{  background:var(--orange-bg) !important; border:2px solid var(--orange-bd) !important; color:var(--text-light) !important; }
-    .selector-pill.specific{ background:var(--blue-bg) !important;   border:2px solid var(--blue-bd) !important;   color:var(--text-light) important; }
+    #css-selector-picker-root .selector-pill.generic{  background:var(--orange-bg) !important; border:2px solid var(--orange-bd) !important; color:var(--text-light) !important; }
+    #css-selector-picker-root .selector-pill.specific{ background:var(--blue-bg) !important;   border:2px solid var(--blue-bd) !important;   color:var(--text-light) important; }
 
-    .picker-results{
+    #css-selector-picker-root .picker-results{
       position:fixed!important; right:16px; bottom:20px; z-index:2147483648;
       display:none; flex-direction:column; gap:12px;
-      pointer-events:none; /* container doesn't block page; children opt-in */
+      pointer-events:none;
     }
-    .picker-row{ display:flex; gap:8px; align-items:center; justify-content:flex-end; }
+    #css-selector-picker-root .picker-row{ display:flex; gap:8px; align-items:center; justify-content:flex-end; }
 
-    .action-group{ display:flex; gap:6px; pointer-events:none; }
-    .action-btn{
+    #css-selector-picker-root .action-group{ display:flex; gap:6px; pointer-events:none; }
+    #css-selector-picker-root .action-btn{
       height:var(--pill-h)!important; width:var(--pill-h)!important;
       min-width:var(--pill-h)!important; min-height:var(--pill-h)!important;
       display:inline-flex; align-items:center; justify-content:center;
@@ -456,31 +455,27 @@
       box-shadow:0 3px 10px rgba(0,0,0,.10);
       pointer-events:auto;
     }
-    .action-btn.generic{ border-color:var(--orange-bd); }
-    .action-btn.specific{ border-color:var(--blue-bd); }
-    /* Active state highlight for the CSS button */
-    .action-btn.generic.active{ background:var(--orange-bg)!important; border-color:var(--orange-bd)!important; }
-    .action-btn.specific.active{ background:var(--blue-bg)!important; border-color:var(--blue-bd)!important; }
-    /* Hide CSS info buttons until an element is locked */
-    .picker-results:not(.locked) .action-btn[data-action="css"]{ display:none!important; }
+    #css-selector-picker-root .action-btn.generic{ border-color:var(--orange-bd); }
+    #css-selector-picker-root .action-btn.specific{ border-color:var(--blue-bd); }
+    #css-selector-picker-root .action-btn.generic.active{ background:var(--orange-bg)!important; border-color:var(--orange-bd)!important; }
+    #css-selector-picker-root .action-btn.specific.active{ background:var(--blue-bg)!important; border-color:var(--blue-bd)!important; }
+    #css-selector-picker-root .picker-results:not(.locked) .action-btn[data-action="css"]{ display:none!important; }
 
-    /* Overlays (never block) */
-    .picker-hover-box{
+    #css-selector-picker-root .picker-hover-box{
       position:fixed; z-index:2147483646; pointer-events:none;
       border:1px dotted rgba(26,115,232,.95) !important; background:rgba(26,115,232,.20);
       border-radius:3px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);
       transition:transform .06s ease,width .06s ease,height .06s ease,left .06s ease,top .06s ease;
     }
-    .picker-matches-layer{position:fixed;left:0;top:0;width:0;height:0;z-index:2147483645;pointer-events:none;}
-    .picker-match-box{
+    #css-selector-picker-root .picker-matches-layer{position:fixed;left:0;top:0;width:0;height:0;z-index:2147483645;pointer-events:none;}
+    #css-selector-picker-root .picker-match-box{
       position:fixed; pointer-events:none; border:1px dotted rgba(255,140,0,.95) !important;
       background:rgba(255,140,0,.22); border-radius:3px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.25);
-      }
-      .picker-hover-box.locked{ border-style:solid !important; }
-      .picker-match-box.locked{ border-style:solid !important; }
+    }
+    #css-selector-picker-root .picker-hover-box.locked{ border-style:solid !important; }
+    #css-selector-picker-root .picker-match-box.locked{ border-style:solid !important; }
 
-    /* Circular grabber (bottom-left) */
-    .picker-grabber{
+    #css-selector-picker-root .picker-grabber{
       position:fixed; left:12px; bottom:20px; z-index:2147483649;
       width:var(--grabber-size); height:var(--grabber-size);
       display:flex; align-items:center; justify-content:center;
@@ -490,55 +485,56 @@
       -webkit-tap-highlight-color:transparent;
       pointer-events:auto;
     }
-    .picker-grabber.active{ background:var(--grabber-active); }
+    #css-selector-picker-root .picker-grabber.active{ background:var(--grabber-active); }
 
-    /* Left swipe zone (only when picker OFF) */
-    .picker-swipe-zone{
+    #css-selector-picker-root .picker-swipe-zone{
       position:fixed; left:0; bottom:0; width:28vw; height:28vh; z-index:2147483643;
       background:transparent; pointer-events:auto;
     }
-    .picker-swipe-zone.disabled{ pointer-events:none; }
-    .selector-pill .pill-text{ display:block; overflow:hidden; text-overflow:ellipsis; word-break:break-all; white-space:nowrap;}
-    .selector-pill .pill-lock{
+    #css-selector-picker-root .picker-swipe-zone.disabled{ pointer-events:none; }
+    #css-selector-picker-root .selector-pill .pill-text{ display:block; overflow:hidden; text-overflow:ellipsis; word-break:break-all; white-space:nowrap;}
+    #css-selector-picker-root .selector-pill .pill-lock{
       display:none; align-items:center; justify-content:center;
       position:absolute; right:0px; top:0px;
       width:50px; height:100%; padding:0; margin:0; border-radius:0 10px 10px 0;
       font-size:20px; font-weight: bold; line-height:1; cursor:pointer; user-select:none;
       pointer-events:auto;
     }
-    .selector-pill.generic .pill-lock{ border-color:var(--orange-bd); }
-    .selector-pill.specific .pill-lock{ border-color:var(--blue-bd); }
-    .picker-results.locked .pill-lock{ display:flex; }
+    #css-selector-picker-root .selector-pill.generic .pill-lock{ border-color:var(--orange-bd); }
+    #css-selector-picker-root .selector-pill.specific .pill-lock{ border-color:var(--blue-bd); }
+    #css-selector-picker-root .picker-results.locked .pill-lock{ display:flex; }
 
-    /* Computed CSS overlay */
-    .picker-css-overlay{
+    #css-selector-picker-root .picker-css-overlay{
       position:fixed; z-index:2147483650; max-width:min(72vw, 640px);
       background:#101114; color:#f5f7fb; border:1px solid rgba(255,255,255,.15);
       border-radius:10px; box-shadow:0 14px 40px rgba(0,0,0,.45);
       font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       pointer-events:auto; display:none;
-      /* Make the overlay itself scrollable and constrain height to viewport */
       max-height:60vh;
       overflow:scroll;
     }
-    .picker-css-overlay .css-ov-header{
+    #css-selector-picker-root .picker-css-overlay .css-ov-header{
       display:flex !important; align-items:center !important; justify-content:space-between !important;
       gap:8px !important; padding:10px 14px !important; background:rgba(255,255,255,.04) !important;
       border-bottom:1px solid rgba(255,255,255,.08) !important;
       font-family:var(--font) !important; font-weight:700 !important; font-size:13px !important;
     }
-    .picker-css-overlay .css-ov-title{ opacity:.85 !important; }
-    .picker-css-overlay .css-ov-copy{
+    #css-selector-picker-root .picker-css-overlay .css-ov-title{ opacity:.85 !important; }
+    #css-selector-picker-root .picker-css-overlay .css-ov-copy{
       appearance:none !important; -webkit-appearance:none !important; border:none !important; outline:none !important;
       background:#2b2f38 !important; color:#fff !important; border:1px solid #1d2129 !important;;
       padding:6px 9px !important; border-radius:8px !important; cursor:pointer !important; font-weight:700 !important; font-size:12px !important;
     }
-    .picker-css-overlay .css-ov-copy:active{ transform:translateY(1px) !important; }
-    /* Constrain the pre/code area so long CSS output can scroll inside the overlay */
-    .picker-css-overlay pre{ margin:0 !important; padding:8px 16px !important; background: inherit !important; border: none !important; color: inherit !important;}
-    .picker-css-overlay code{ font-size: 10px !important; max-width: 340px !important; white-space: nowrap; text-overflow: ellipsis; display:block !important; border: none !important; white-space:pre !important; padding:8px !important; overflow-y:auto !important; overflow-x: hidden !important; word-break:break-word !important; background:inherit !important;}
-    .picker-css-overlay { /* keep existing behavior for other axes */ }
+    #css-selector-picker-root .picker-css-overlay .css-ov-copy:active{ transform:translateY(1px) !important; }
+    #css-selector-picker-root .picker-css-overlay pre{ margin:0 !important; padding:8px 16px !important; background: inherit !important; border: none !important; color: inherit !important;}
+    #css-selector-picker-root .picker-css-overlay code{ font-size: 10px !important; max-width: 340px !important; white-space: nowrap; text-overflow: ellipsis; display:block !important; border: none !important; white-space:pre !important; padding:8px !important; overflow-y:auto !important; overflow-x: hidden !important; word-break:break-word !important; background:inherit !important;}
   `);
+
+  // Create isolated root container so styles don't leak.
+  const pickerRoot = document.createElement('div');
+  pickerRoot.id = 'css-selector-picker-root';
+  pickerRoot.setAttribute('data-picker-ui','1'); // keep existing detection
+  document.documentElement.appendChild(pickerRoot);
 
   // ---------- UI ----------
   const results = document.createElement("div");
@@ -569,17 +565,19 @@
     </div>
   `;
   document.documentElement.appendChild(results);
+  // Replace direct appends to document root with scoped root
+  pickerRoot.appendChild(results);
 
   const hoverBox = document.createElement("div");
   hoverBox.className = "picker-hover-box";
   hoverBox.setAttribute("data-picker-ui", "1");
   hoverBox.style.display = "none";
-  document.documentElement.appendChild(hoverBox);
+  pickerRoot.appendChild(hoverBox);
 
   const matchesLayer = document.createElement("div");
   matchesLayer.className = "picker-matches-layer";
   matchesLayer.setAttribute("data-picker-ui", "1");
-  document.documentElement.appendChild(matchesLayer);
+  pickerRoot.appendChild(matchesLayer);
 
   // Grabber + swipe zone
   const grabber = document.createElement("div");
@@ -587,12 +585,12 @@
   grabber.setAttribute("data-picker-ui", "1");
   grabber.setAttribute("title", "Start/Stop Picker");
   grabber.textContent = "⊹";
-  document.documentElement.appendChild(grabber);
+  pickerRoot.appendChild(grabber);
 
   const swipeZone = document.createElement("div");
   swipeZone.className = "picker-swipe-zone";
   swipeZone.setAttribute("data-picker-ui", "1");
-  document.documentElement.appendChild(swipeZone);
+  pickerRoot.appendChild(swipeZone);
 
   // Computed CSS overlay
   const cssOverlay = document.createElement("div");
@@ -605,7 +603,7 @@
     </div>
     <pre data-picker-ui="1"><code class="css-ov-code" data-picker-ui="1"></code></pre>
   `;
-  document.documentElement.appendChild(cssOverlay);
+  pickerRoot.appendChild(cssOverlay);
 
   // Hide rules style
   const hideStyle = document.createElement("style");
