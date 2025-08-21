@@ -559,8 +559,6 @@
       </div>
     </div>
   `;
-  document.documentElement.appendChild(results);
-  // Replace direct appends to document root with scoped root
   pickerRoot.appendChild(results);
 
   const hoverBox = document.createElement("div");
@@ -618,8 +616,6 @@
   let lastOverlayKind = null; // 'generic' | 'specific'
 
   let activeTouchCount = 0;
-  let lastTouchX = 0,
-    lastTouchY = 0;
 
   let hoveredTarget = null;
   let selectorGeneric = "";
@@ -641,417 +637,433 @@
 
   const uiContains = (node) => !!(node && node.closest('[data-picker-ui="1"]'));
 
+  // ---------- performance helpers ----------
+  
+  // Cache for expensive computations
+  const selectorCache = new WeakMap();
+  const semanticCache = new WeakMap();
+  const selectorTestCache = new Map(); // Cache for selector test results
+  const boundingRectCache = new WeakMap(); // Cache for getBoundingClientRect
+  
+  // Performance throttle for cache cleaning
+  let cacheCleanupTimer = null;
+  const scheduleCleanup = () => {
+    if (cacheCleanupTimer) return;
+    cacheCleanupTimer = setTimeout(() => {
+      // Clean selector test cache if it gets too large
+      if (selectorTestCache.size > 500) {
+        selectorTestCache.clear();
+      }
+      cacheCleanupTimer = null;
+    }, 30000); // Clean every 30 seconds
+  };
+  
+  // Optimized helper functions with caching
+  const getSemanticClasses = (() => {
+    const cache = new WeakMap();
+    return (element) => {
+      if (!element || !element.classList) return [];
+      if (cache.has(element)) return cache.get(element);
+      
+      const result = [];
+      for (const cls of element.classList) {
+        if (!looksUniqueToken(cls) && /^[a-z][a-z-]*$/i.test(cls)) {
+          result.push(cls);
+        }
+      }
+      cache.set(element, result);
+      return result;
+    };
+  })();
+  
+  const getSameTagSiblings = (() => {
+    const cache = new WeakMap();
+    return (element) => {
+      const parent = element.parentElement;
+      if (!parent) return [];
+      
+      const cacheKey = `${parent.tagName}-${element.tagName}`;
+      if (cache.has(parent)) {
+        const cached = cache.get(parent);
+        if (cached.key === cacheKey) return cached.siblings;
+      }
+      
+      const siblings = [];
+      for (const child of parent.children) {
+        if (child.tagName === element.tagName) {
+          siblings.push(child);
+        }
+      }
+      
+      cache.set(parent, { key: cacheKey, siblings });
+      return siblings;
+    };
+  })();
+  
+  const getCachedBoundingRect = (element) => {
+    if (boundingRectCache.has(element)) {
+      return boundingRectCache.get(element);
+    }
+    const rect = element.getBoundingClientRect();
+    boundingRectCache.set(element, rect);
+    // Clear cache after a short time since rects can change
+    setTimeout(() => boundingRectCache.delete(element), 1000);
+    return rect;
+  };
+  
+  const testSelector = (selector, expectedElement = null, minMatches = 1, maxMatches = 200) => {
+    // Create cache key
+    const cacheKey = `${selector}|${minMatches}|${maxMatches}`;
+    
+    // Check cache first
+    if (selectorTestCache.has(cacheKey)) {
+      const cached = selectorTestCache.get(cacheKey);
+      if (expectedElement) {
+        // Need to verify the expected element is still in the matches
+        return {
+          ...cached,
+          valid: cached.valid && cached.matches && cached.matches.includes(expectedElement)
+        };
+      }
+      return cached;
+    }
+    
+    try {
+      const matches = document.querySelectorAll(selector);
+      const count = matches.length;
+      const matchesArray = count <= 50 ? Array.from(matches) : null; // Only cache small arrays
+      
+      const result = {
+        valid: count >= minMatches && count <= maxMatches,
+        count,
+        matches: matchesArray
+      };
+      
+      if (expectedElement && matchesArray) {
+        result.valid = result.valid && matchesArray.includes(expectedElement);
+      }
+      
+      // Cache the result
+      selectorTestCache.set(cacheKey, result);
+      scheduleCleanup();
+      
+      return result;
+    } catch(_) {
+      const result = { valid: false, count: 0 };
+      selectorTestCache.set(cacheKey, result);
+      return result;
+    }
+  };
+
   // ---------- selector builders ----------
 
   function buildGeneric(el) {
     if (!(el instanceof Element)) return "*";
     
+    // Check cache first
+    if (selectorCache.has(el)) {
+      return selectorCache.get(el).generic;
+    }
+    
     try {
-      const MAX_MATCHES_TARGET = 200;     // acceptable upper bound of generic breadth
-      const MIN_MATCHES_TARGET = 2;       // we want at least a couple similar nodes
-      const OPTIMAL_MATCHES_TARGET = 20;  // sweet spot for generic selectors
+      const MAX_MATCHES_TARGET = 200;
+      const MIN_MATCHES_TARGET = 2;
       
-      // Helper: analyze semantic patterns in attributes and content
-      function getSemanticSignature(node) {
-        const signature = {
-          classes: [],
-          dataAttrs: [],
-          roles: [],
-          contentPattern: null
-        };
-        
-        // Collect semantic classes (avoid generated/unique ones)
-        for (const cls of node.classList) {
-          if (!looksUniqueToken(cls) && /^[a-z][a-z-]*[a-z]$/i.test(cls)) {
-            signature.classes.push(cls);
-          }
-        }
-        
-        // Collect semantic data attributes
-        for (const attr of node.attributes) {
-          if (attr.name.startsWith('data-') && !looksUniqueToken(attr.value)) {
-            signature.dataAttrs.push({name: attr.name, value: attr.value});
-          }
-          if (attr.name === 'role' || attr.name === 'aria-label') {
-            signature.roles.push({name: attr.name, value: attr.value});
-          }
-        }
-        
-        // Analyze content patterns for text-heavy elements
-        const text = node.textContent?.trim();
-        if (text && text.length > 0 && text.length < 100) {
-          // Look for patterns like prices, dates, numbers, etc.
-          if (/^\$[\d,]+\.?\d*$/.test(text)) signature.contentPattern = 'price';
-          else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(text)) signature.contentPattern = 'date';
-          else if (/^\d+$/.test(text)) signature.contentPattern = 'number';
-          else if (/^[A-Z][a-z]+ \d+$/.test(text)) signature.contentPattern = 'month-day';
-        }
-        
-        return signature;
+      // Get cached semantic signature
+      let signature = semanticCache.get(el);
+      if (!signature) {
+        signature = getSemanticSignature(el);
+        semanticCache.set(el, signature);
       }
       
-      // Helper: find the best semantic container for similar elements
-      function findSemanticContainer(element) {
-        let current = element.parentElement;
-        const candidates = [];
-        
-        while (current && current !== document.documentElement) {
-          const children = Array.from(current.children);
-          const sameTagSiblings = children.filter(c => c.tagName === element.tagName);
-          
-          if (sameTagSiblings.length >= 2) {
-            // Analyze semantic similarity among siblings
-            const signatures = sameTagSiblings.map(getSemanticSignature);
-            const commonClasses = findCommonClasses(signatures);
-            const commonDataAttrs = findCommonDataAttrs(signatures);
-            const hasContentPattern = signatures.some(s => s.contentPattern);
-            
-            const score = calculateContainerScore(current, sameTagSiblings.length, commonClasses, commonDataAttrs, hasContentPattern);
-            candidates.push({
-              container: current,
-              siblings: sameTagSiblings,
-              commonClasses,
-              commonDataAttrs,
-              score
-            });
-          }
-          current = current.parentElement;
-        }
-        
-        // Return the best container (highest score)
-        candidates.sort((a, b) => b.score - a.score);
-        return candidates[0] || null;
-      }
+      const tag = el.tagName.toLowerCase();
+      const isOverlyBroad = ['div', 'span', 'p', 'a', 'li', 'td', 'th', 'tr', 'img', 'input', 'button'].includes(tag);
       
-      function findCommonClasses(signatures) {
-        if (signatures.length < 2) return [];
-        const classCounts = new Map();
-        signatures.forEach(sig => {
-          sig.classes.forEach(cls => {
-            classCounts.set(cls, (classCounts.get(cls) || 0) + 1);
-          });
-        });
-        
-        const threshold = Math.max(2, Math.ceil(signatures.length * 0.6)); // 60% threshold
-        return Array.from(classCounts.entries())
-          .filter(([cls, count]) => count >= threshold)
-          .map(([cls]) => cls)
-          .slice(0, 3); // Limit to top 3
-      }
-      
-      function findCommonDataAttrs(signatures) {
-        if (signatures.length < 2) return [];
-        const attrCounts = new Map();
-        signatures.forEach(sig => {
-          sig.dataAttrs.forEach(attr => {
-            const key = `${attr.name}=${attr.value}`;
-            attrCounts.set(key, (attrCounts.get(key) || 0) + 1);
-          });
-        });
-        
-        const threshold = Math.max(2, Math.ceil(signatures.length * 0.8)); // 80% threshold for data attrs
-        return Array.from(attrCounts.entries())
-          .filter(([key, count]) => count >= threshold)
-          .map(([key]) => {
-            const [name, value] = key.split('=');
-            return {name, value};
-          })
-          .slice(0, 2); // Limit to top 2
-      }
-      
-      function calculateContainerScore(container, siblingCount, commonClasses, commonDataAttrs, hasContentPattern) {
-        let score = 0;
-        
-        // Base score from sibling count (more siblings = better for generic selection)
-        score += Math.min(siblingCount * 10, 100);
-        
-        // Bonus for semantic indicators
-        score += commonClasses.length * 15;
-        score += commonDataAttrs.length * 20;
-        if (hasContentPattern) score += 25;
-        
-        // Bonus for semantic container tags
-        const tag = container.tagName.toLowerCase();
-        if (['ul', 'ol', 'nav', 'section', 'main', 'article'].includes(tag)) score += 30;
-        if (['div'].includes(tag)) score += 5; // slight preference for divs over generic containers
-        
-        // Penalty for deeply nested structures (prefer higher-level containers)
-        let depth = 0;
-        let current = container;
-        while (current && current !== document.body) {
-          depth++;
-          current = current.parentElement;
-        }
-        score -= Math.max(0, depth - 3) * 5;
-        
-        return score;
-      }
-      
-      // Helper function to detect overly broad/common tags
-      function isOverlyBroadTag(tag) {
-        const broadTags = ['div', 'span', 'p', 'a', 'li', 'td', 'th', 'tr', 'img', 'input', 'button'];
-        return broadTags.includes(tag);
-      }
-      
-      // Helper function to build a more constrained generic selector when tag-only is too broad
-      function buildConstrainedGenericSelector(element) {
-        const tag = element.tagName.toLowerCase();
-        const signature = getSemanticSignature(element);
-        
-        // Strategy 1: Try element's own semantic classes
-        if (signature.classes.length > 0) {
-          for (let i = 0; i < Math.min(signature.classes.length, 2); i++) {
-            const classSelector = `${tag}.${CSS.escape(signature.classes[i])}`;
-            try {
-              const matches = document.querySelectorAll(classSelector);
-              if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
-                return classSelector;
-              }
-            } catch(_) {}
-          }
-          
-          // Try multiple classes combined
-          if (signature.classes.length > 1) {
-            const multiClassSelector = `${tag}.${signature.classes.slice(0, 2).map(c => CSS.escape(c)).join('.')}`;
-            try {
-              const matches = document.querySelectorAll(multiClassSelector);
-              if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
-                return multiClassSelector;
-              }
-            } catch(_) {}
-          }
-        }
-        
-        // Strategy 2: Try element's semantic data attributes
-        if (signature.dataAttrs.length > 0) {
-          for (const attr of signature.dataAttrs) {
-            const attrSelector = `${tag}[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`;
-            try {
-              const matches = document.querySelectorAll(attrSelector);
-              if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
-                return attrSelector;
-              }
-            } catch(_) {}
-          }
-        }
-        
-        // Strategy 3: Try role or aria attributes
-        if (signature.roles.length > 0) {
-          for (const role of signature.roles) {
-            const roleSelector = `${tag}[${CSS.escape(role.name)}="${CSS.escape(role.value)}"]`;
-            try {
-              const matches = document.querySelectorAll(roleSelector);
-              if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
-                return roleSelector;
-              }
-            } catch(_) {}
-          }
-        }
-        
-        // Strategy 4: Try parent context with current element's first class
-        if (signature.classes.length > 0) {
-          const parent = element.parentElement;
-          if (parent) {
-            const parentSelector = getMinimalContainerSelector(parent);
-            if (parentSelector) {
-              const contextSelector = `${parentSelector} ${tag}.${CSS.escape(signature.classes[0])}`;
-              try {
-                const matches = document.querySelectorAll(contextSelector);
-                if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
-                  return contextSelector;
-                }
-              } catch(_) {}
-            }
-          }
-        }
-        
-        // Strategy 5: Try positional selectors within parent (but avoid nth-child if possible)
-        const parent = element.parentElement;
-        if (parent) {
-          const parentSelector = getMinimalContainerSelector(parent);
-          if (parentSelector) {
-            // Try first/last child if applicable
-            const siblings = Array.from(parent.children).filter(c => c.tagName === element.tagName);
-            if (siblings.length > 1) {
-              const elementIndex = siblings.indexOf(element);
-              if (elementIndex === 0) {
-                const firstChildSelector = `${parentSelector} ${tag}:first-child`;
-                try {
-                  const matches = document.querySelectorAll(firstChildSelector);
-                  if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
-                    return firstChildSelector;
-                  }
-                } catch(_) {}
-              } else if (elementIndex === siblings.length - 1) {
-                const lastChildSelector = `${parentSelector} ${tag}:last-child`;
-                try {
-                  const matches = document.querySelectorAll(lastChildSelector);
-                  if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
-                    return lastChildSelector;
-                  }
-                } catch(_) {}
-              }
-            }
-          }
-        }
-        
-        // Strategy 6: Use content pattern matching for similar content
-        if (signature.contentPattern) {
-          // Find elements with similar content patterns
-          const allElements = document.querySelectorAll(tag);
-          const similarElements = Array.from(allElements).filter(el => {
-            const elSignature = getSemanticSignature(el);
-            return elSignature.contentPattern === signature.contentPattern;
-          });
-          
-          if (similarElements.length >= MIN_MATCHES_TARGET && similarElements.length <= MAX_MATCHES_TARGET) {
-            // Try to find a common parent or pattern
-            const commonParents = new Map();
-            similarElements.forEach(el => {
-              let parent = el.parentElement;
-              while (parent && parent !== document.body) {
-                const parentSignature = getSemanticSignature(parent);
-                if (parentSignature.classes.length > 0) {
-                  const key = `${parent.tagName.toLowerCase()}.${parentSignature.classes[0]}`;
-                  commonParents.set(key, (commonParents.get(key) || 0) + 1);
-                  break;
-                }
-                parent = parent.parentElement;
-              }
-            });
-            
-            // Find the most common parent pattern
-            for (const [parentPattern, count] of commonParents.entries()) {
-              if (count >= Math.ceil(similarElements.length * 0.7)) {
-                const contentBasedSelector = `${parentPattern} ${tag}`;
-                try {
-                  const matches = document.querySelectorAll(contentBasedSelector);
-                  if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
-                    return contentBasedSelector;
-                  }
-                } catch(_) {}
-              }
-            }
-          }
-        }
-        
-        // Last resort: Use finder but remove positional selectors to make it more generic
-        try {
-          let finderResult = finder(element);
-          // Remove nth-child and nth-of-type to make it more generic
-          const genericified = finderResult.replace(/:nth-(child|of-type)\(\d+\)/g, '');
-          const matches = document.querySelectorAll(genericified);
-          if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
-            return genericified;
-          }
-        } catch(_) {}
-        
-        // Absolute last resort: return the specific selector as it's better than an overly broad one
-        try {
-          return finder(element);
-        } catch(_) {
-          return tag; // Even if it's broad, we need to return something
-        }
-      }
-      
-      // Main algorithm: build generic selector
-      const containerInfo = findSemanticContainer(el);
-      
-      if (!containerInfo) {
-        // Fallback: no good container found, use simple tag-based approach
-        const tag = el.tagName.toLowerCase();
-        const ownSignature = getSemanticSignature(el);
-        
-        let selector = tag;
-        if (ownSignature.classes.length > 0) {
-          selector += '.' + ownSignature.classes.slice(0, 2).map(c => CSS.escape(c)).join('.');
-        }
-        
-        // Test this simple selector
-        try {
-          const matches = document.querySelectorAll(selector);
-          if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+      // Quick path for unique elements with good attributes
+      if (signature.classes.length > 0) {
+        for (let i = 0; i < Math.min(signature.classes.length, 2); i++) {
+          const selector = `${tag}.${CSS.escape(signature.classes[i])}`;
+          const result = testSelector(selector, el, MIN_MATCHES_TARGET, MAX_MATCHES_TARGET);
+          if (result.valid) {
+            selectorCache.set(el, { generic: selector });
             return selector;
           }
-        } catch(_) {}
+        }
+      }
+      
+      // Try semantic container approach only if needed
+      const containerInfo = findSemanticContainer(el);
+      if (containerInfo) {
+        const { container, commonClasses, commonDataAttrs } = containerInfo;
+        const containerSelector = getMinimalContainerSelector(container);
         
-        // Check if tag-only would be too broad
-        const tagOnlyMatches = document.querySelectorAll(tag).length;
-        if (tagOnlyMatches > MAX_MATCHES_TARGET || isOverlyBroadTag(tag)) {
-          return buildConstrainedGenericSelector(el);
+        let targetSelector = tag;
+        if (commonClasses.length > 0) {
+          targetSelector += '.' + commonClasses.slice(0, 2).map(c => CSS.escape(c)).join('.');
+        }
+        if (commonDataAttrs.length > 0) {
+          targetSelector += commonDataAttrs.slice(0, 1).map(attr => 
+            `[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`
+          ).join('');
         }
         
-        // Ultimate fallback
-        return tag;
-      }
-      
-      // Build selector using container context
-      const { container, commonClasses, commonDataAttrs } = containerInfo;
-      const targetTag = el.tagName.toLowerCase();
-      
-      // Start with container selector
-      let containerSelector = getMinimalContainerSelector(container);
-      
-      // Build target element selector
-      let targetSelector = targetTag;
-      if (commonClasses.length > 0) {
-        targetSelector += '.' + commonClasses.map(c => CSS.escape(c)).join('.');
-      }
-      if (commonDataAttrs.length > 0) {
-        targetSelector += commonDataAttrs.map(attr => 
-          `[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`
-        ).join('');
-      }
-      
-      // Combine with appropriate combinator
-      const fullSelector = containerSelector ? `${containerSelector} ${targetSelector}` : targetSelector;
-      
-      // Test and validate
-      try {
-        const matches = document.querySelectorAll(fullSelector);
-        const count = matches.length;
+        const fullSelector = containerSelector ? `${containerSelector} ${targetSelector}` : targetSelector;
+        const result = testSelector(fullSelector, el, MIN_MATCHES_TARGET, MAX_MATCHES_TARGET);
         
-        if (count >= MIN_MATCHES_TARGET && count <= MAX_MATCHES_TARGET && Array.from(matches).includes(el)) {
+        if (result.valid) {
+          selectorCache.set(el, { generic: fullSelector });
           return fullSelector;
         }
         
-        // If too specific, try without container
-        if (count < MIN_MATCHES_TARGET) {
-          const matches2 = document.querySelectorAll(targetSelector);
-          if (matches2.length >= MIN_MATCHES_TARGET && matches2.length <= MAX_MATCHES_TARGET) {
+        // Try simpler version
+        if (containerSelector && targetSelector !== tag) {
+          const simpleResult = testSelector(targetSelector, el, MIN_MATCHES_TARGET, MAX_MATCHES_TARGET);
+          if (simpleResult.valid) {
+            selectorCache.set(el, { generic: targetSelector });
             return targetSelector;
           }
         }
-        
-        // If still too specific, try just tag + first common class
-        if (commonClasses.length > 0) {
-          const simpleSelector = `${targetTag}.${CSS.escape(commonClasses[0])}`;
-          const matches3 = document.querySelectorAll(simpleSelector);
-          if (matches3.length >= MIN_MATCHES_TARGET && matches3.length <= MAX_MATCHES_TARGET) {
-            return simpleSelector;
-          }
-        }
-        
-      } catch(_) {}
-      
-      // Before falling back to tag-only, check if it's too broad
-      const tagOnlyMatches = document.querySelectorAll(targetTag).length;
-      if (tagOnlyMatches > MAX_MATCHES_TARGET || isOverlyBroadTag(targetTag)) {
-        // Try to build a more specific selector using element's own attributes
-        return buildConstrainedGenericSelector(el);
       }
       
-      // Fallback to tag-only if it's reasonable
-      return targetTag;
+      // Fallback logic - only if tag isn't too broad
+      const tagResult = testSelector(tag, null, MIN_MATCHES_TARGET, MAX_MATCHES_TARGET);
+      if (tagResult.valid && !isOverlyBroad) {
+        selectorCache.set(el, { generic: tag });
+        return tag;
+      }
+      
+      // Last resort - build constrained selector
+      const constrainedSelector = buildConstrainedGenericSelector(el);
+      selectorCache.set(el, { generic: constrainedSelector });
+      return constrainedSelector;
       
     } catch (err) {
       // Ultimate fallback
       try {
-        let sel = finder(el);
-        return sel.replace(/:nth-[^(]+\([^)]+\)/g, "");
+        const finderResult = finder(el).replace(/:nth-[^(]+\([^)]+\)/g, "");
+        selectorCache.set(el, { generic: finderResult });
+        return finderResult;
       } catch (_) { 
-        return el.tagName.toLowerCase(); 
+        const fallback = el.tagName.toLowerCase();
+        selectorCache.set(el, { generic: fallback });
+        return fallback;
       }
+    }
+  }
+  
+  // Helper: analyze semantic patterns in attributes and content  
+  const getSemanticSignature = (() => {
+    const contentPatternCache = new Map();
+    
+    return (node) => {
+      if (semanticCache.has(node)) {
+        return semanticCache.get(node);
+      }
+      
+      const signature = {
+        classes: getSemanticClasses(node),
+        dataAttrs: [],
+        roles: [],
+        contentPattern: null
+      };
+      
+      // Collect semantic data attributes and roles (optimized loop)
+      const attrs = node.attributes;
+      for (let i = 0; i < attrs.length; i++) {
+        const attr = attrs[i];
+        if (attr.name.startsWith('data-') && !looksUniqueToken(attr.value)) {
+          signature.dataAttrs.push({name: attr.name, value: attr.value});
+        } else if (attr.name === 'role' || attr.name === 'aria-label') {
+          signature.roles.push({name: attr.name, value: attr.value});
+        }
+        // Limit collection to prevent excessive data
+        if (signature.dataAttrs.length >= 3) break;
+      }
+      
+      // Analyze content patterns for text-heavy elements (with caching)
+      const text = node.textContent?.trim();
+      if (text && text.length > 0 && text.length < 100) {
+        if (contentPatternCache.has(text)) {
+          signature.contentPattern = contentPatternCache.get(text);
+        } else {
+          let pattern = null;
+          if (/^\$[\d,]+\.?\d*$/.test(text)) pattern = 'price';
+          else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(text)) pattern = 'date';
+          else if (/^\d+$/.test(text)) pattern = 'number';
+          else if (/^[A-Z][a-z]+ \d+$/.test(text)) pattern = 'month-day';
+          
+          signature.contentPattern = pattern;
+          // Cache pattern result
+          if (contentPatternCache.size < 200) {
+            contentPatternCache.set(text, pattern);
+          }
+        }
+      }
+      
+      semanticCache.set(node, signature);
+      return signature;
+    };
+  })();
+  
+  // Helper: find the best semantic container for similar elements (optimized)
+  const findSemanticContainer = (() => {
+    const containerCache = new WeakMap();
+    
+    return (element) => {
+      if (containerCache.has(element)) {
+        return containerCache.get(element);
+      }
+      
+      let current = element.parentElement;
+      const candidates = [];
+      let depth = 0;
+      const MAX_DEPTH = 3; // Reduced from unlimited traversal
+      
+      while (current && current !== document.documentElement && depth < MAX_DEPTH) {
+        const sameTagSiblings = getSameTagSiblings(element);
+        
+        if (sameTagSiblings.length >= 2) {
+          const maxSiblingsToAnalyze = Math.min(sameTagSiblings.length, 8); // Reduced from 10
+          const signatures = [];
+          
+          // Optimized signature collection
+          for (let i = 0; i < maxSiblingsToAnalyze; i++) {
+            signatures.push(getSemanticSignature(sameTagSiblings[i]));
+          }
+          
+          const commonClasses = findCommonClasses(signatures);
+          const commonDataAttrs = findCommonDataAttrs(signatures);
+          const hasContentPattern = signatures.some(s => s.contentPattern);
+          
+          const score = calculateContainerScore(current, sameTagSiblings.length, commonClasses, commonDataAttrs, hasContentPattern);
+          candidates.push({
+            container: current,
+            siblings: sameTagSiblings,
+            commonClasses,
+            commonDataAttrs,
+            score
+          });
+        }
+        current = current.parentElement;
+        depth++;
+      }
+      
+      // Return the best container (highest score)
+      const result = candidates.length > 0 ? candidates.reduce((a, b) => a.score > b.score ? a : b) : null;
+      containerCache.set(element, result);
+      return result;
+    };
+  })();
+  
+  // Optimized common classes/attributes detection
+  function findCommonClasses(signatures) {
+    if (signatures.length < 2) return [];
+    
+    const classCounts = new Map();
+    const threshold = Math.max(2, Math.ceil(signatures.length * 0.6));
+    
+    // Optimized counting
+    for (const sig of signatures) {
+      const seen = new Set(); // Avoid counting same class multiple times per signature
+      for (const cls of sig.classes) {
+        if (!seen.has(cls)) {
+          seen.add(cls);
+          classCounts.set(cls, (classCounts.get(cls) || 0) + 1);
+        }
+      }
+    }
+    
+    const result = [];
+    for (const [cls, count] of classCounts) {
+      if (count >= threshold && result.length < 2) { // Early termination
+        result.push(cls);
+      }
+    }
+    return result;
+  }
+  
+  function findCommonDataAttrs(signatures) {
+    if (signatures.length < 2) return [];
+    
+    const attrCounts = new Map();
+    const threshold = Math.max(2, Math.ceil(signatures.length * 0.8));
+    
+    // Optimized counting
+    for (const sig of signatures) {
+      const seen = new Set();
+      for (const attr of sig.dataAttrs) {
+        const key = `${attr.name}=${attr.value}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          attrCounts.set(key, (attrCounts.get(key) || 0) + 1);
+        }
+      }
+    }
+    
+    // Return only the first match to avoid over-processing
+    for (const [key, count] of attrCounts) {
+      if (count >= threshold) {
+        const [name, value] = key.split('=');
+        return [{name, value}];
+      }
+    }
+    return [];
+  }
+  
+  function calculateContainerScore(container, siblingCount, commonClasses, commonDataAttrs, hasContentPattern) {
+    let score = Math.min(siblingCount * 10, 100);
+    
+    score += commonClasses.length * 15;
+    score += commonDataAttrs.length * 20;
+    if (hasContentPattern) score += 25;
+    
+    const tag = container.tagName.toLowerCase();
+    if (['ul', 'ol', 'nav', 'section', 'main', 'article'].includes(tag)) score += 30;
+    else if (['div'].includes(tag)) score += 5;
+    
+    return score;
+  }
+  
+  // Simplified constrained selector builder
+  function buildConstrainedGenericSelector(element) {
+    const tag = element.tagName.toLowerCase();
+    let signature = semanticCache.get(element);
+    if (!signature) {
+      signature = getSemanticSignature(element);
+      semanticCache.set(element, signature);
+    }
+    
+    // Try element's own semantic classes (simplified)
+    if (signature.classes.length > 0) {
+      const classSelector = `${tag}.${CSS.escape(signature.classes[0])}`;
+      const result = testSelector(classSelector, element, 2, 200);
+      if (result.valid) return classSelector;
+    }
+    
+    // Try semantic data attributes
+    if (signature.dataAttrs.length > 0) {
+      const attr = signature.dataAttrs[0];
+      const attrSelector = `${tag}[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`;
+      const result = testSelector(attrSelector, element, 2, 200);
+      if (result.valid) return attrSelector;
+    }
+    
+    // Try parent context
+    const parent = element.parentElement;
+    if (parent && signature.classes.length > 0) {
+      const parentSelector = getMinimalContainerSelector(parent);
+      if (parentSelector) {
+        const contextSelector = `${parentSelector} ${tag}.${CSS.escape(signature.classes[0])}`;
+        const result = testSelector(contextSelector, element, 2, 200);
+        if (result.valid) return contextSelector;
+      }
+    }
+    
+    // Last resort
+    try {
+      return finder(element);
+    } catch(_) {
+      return tag;
     }
   }
   
@@ -1094,57 +1106,60 @@
   function buildSpecific(el) {
     if (!(el instanceof Element)) return "*";
     
+    // Check cache first
+    if (selectorCache.has(el)) {
+      return selectorCache.get(el).specific;
+    }
+    
     try {
-      // Try to build a specific selector using stable attributes
       const tag = el.tagName.toLowerCase();
       
       // Priority 1: Unique ID (if not generated/random)
       const id = el.getAttribute('id');
       if (id && !looksUniqueToken(id)) {
-        return `#${CSS.escape(id)}`;
+        const idSelector = `#${CSS.escape(id)}`;
+        selectorCache.set(el, { specific: idSelector });
+        return idSelector;
       }
       
       // Priority 2: Unique data attributes
       for (const attr of el.attributes) {
         if (attr.name.startsWith('data-') && !looksUniqueToken(attr.value)) {
           const selector = `[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`;
-          try {
-            if (document.querySelectorAll(selector).length === 1) {
-              return selector;
-            }
-          } catch(_) {}
+          const result = testSelector(selector, null, 1, 1);
+          if (result.valid) {
+            selectorCache.set(el, { specific: selector });
+            return selector;
+          }
         }
       }
       
       // Priority 3: Unique combination of stable classes
-      const stableClasses = Array.from(el.classList).filter(cls => 
-        !looksUniqueToken(cls) && /^[a-z][a-z-]*$/i.test(cls)
-      );
+      const stableClasses = getSemanticClasses(el);
       
       if (stableClasses.length > 0) {
-        for (let i = 1; i <= Math.min(stableClasses.length, 3); i++) {
+        for (let i = 1; i <= Math.min(stableClasses.length, 2); i++) { // Reduced limit
           const classCombo = stableClasses.slice(0, i).map(c => `.${CSS.escape(c)}`).join('');
           const selector = `${tag}${classCombo}`;
-          try {
-            const matches = document.querySelectorAll(selector);
-            if (matches.length === 1) {
-              return selector;
-            } else if (matches.length > 1 && matches.length <= 10) {
-              // Add parent context to make it unique
-              const parent = el.parentElement;
-              if (parent) {
-                const parentSelector = getMinimalContainerSelector(parent);
-                if (parentSelector) {
-                  const contextSelector = `${parentSelector} ${selector}`;
-                  try {
-                    if (document.querySelectorAll(contextSelector).length === 1) {
-                      return contextSelector;
-                    }
-                  } catch(_) {}
+          const result = testSelector(selector, null, 1, 1);
+          if (result.valid) {
+            selectorCache.set(el, { specific: selector });
+            return selector;
+          } else if (result.count > 1 && result.count <= 5) { // Reduced threshold
+            // Add parent context to make it unique
+            const parent = el.parentElement;
+            if (parent) {
+              const parentSelector = getMinimalContainerSelector(parent);
+              if (parentSelector) {
+                const contextSelector = `${parentSelector} ${selector}`;
+                const contextResult = testSelector(contextSelector, null, 1, 1);
+                if (contextResult.valid) {
+                  selectorCache.set(el, { specific: contextSelector });
+                  return contextSelector;
                 }
               }
             }
-          } catch(_) {}
+          }
         }
       }
       
@@ -1154,29 +1169,34 @@
       // Try to simplify finder result by removing unnecessary nth-child selectors
       const simplified = finderResult.replace(/:nth-child\(\d+\)(?=\s|$)/g, '');
       if (simplified !== finderResult) {
-        try {
-          const matches = document.querySelectorAll(simplified);
-          if (matches.length === 1) {
-            return simplified;
-          }
-        } catch(_) {}
+        const result = testSelector(simplified, null, 1, 1);
+        if (result.valid) {
+          selectorCache.set(el, { specific: simplified });
+          return simplified;
+        }
       }
       
+      selectorCache.set(el, { specific: finderResult });
       return finderResult;
       
     } catch (err) {
       // Final fallback to finder
       try {
-        return finder(el);
+        const fallback = finder(el);
+        selectorCache.set(el, { specific: fallback });
+        return fallback;
       } catch (_) {
-        // Ultimate fallback - this should rarely happen
+        // Ultimate fallback
         const tag = el.tagName.toLowerCase();
         const parent = el.parentElement;
         if (parent) {
-          const siblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
+          const siblings = getSameTagSiblings(el);
           const index = siblings.indexOf(el) + 1;
-          return `${tag}:nth-of-type(${index})`;
+          const fallback = `${tag}:nth-of-type(${index})`;
+          selectorCache.set(el, { specific: fallback });
+          return fallback;
         }
+        selectorCache.set(el, { specific: tag });
         return tag;
       }
     }
@@ -1199,35 +1219,65 @@
     d.style.height = rect.height + "px";
     return d;
   }
+  // Optimized DOM queries with batching
   function drawHighlightsFor(el, sel) {
     clearMatches();
+    
     let matches = [];
     try {
-      matches = Array.from(document.querySelectorAll(sel));
-    } catch (_) {}
-    const LIMIT = 1200;
-    let count = 0;
-    for (const m of matches) {
-      if (count >= LIMIT) break;
-      if (!(m instanceof Element)) continue;
-      if (m === el) continue;
-      if (isPickerNode(m)) continue;
-      const r = m.getBoundingClientRect();
-      if (!r.width || !r.height) continue;
-      const box = boxForRect(r, "picker-match-box");
-      if (locked) box.classList.add("locked");
-      matchesLayer.appendChild(box);
-      count++;
+      const matchQuery = document.querySelectorAll(sel);
+      // Convert NodeList to Array only for processing
+      matches = matchQuery.length <= 1200 ? Array.from(matchQuery) : Array.from(matchQuery).slice(0, 1200);
+    } catch (_) {
+      // Invalid selector, show just the target element
+      const r0 = getCachedBoundingRect(el);
+      if (r0.width && r0.height) {
+        hoverBox.style.cssText = `display:block;left:${r0.left}px;top:${r0.top}px;width:${r0.width}px;height:${r0.height}px`;
+        hoverBox.classList.toggle("locked", !!locked);
+      } else {
+        hoverBox.style.display = "none";
+      }
+      return;
     }
-    const r0 = el.getBoundingClientRect();
+    
+    const fragment = document.createDocumentFragment();
+    const boxElements = []; // Batch style applications
+    
+    for (const m of matches) {
+      if (!(m instanceof Element) || m === el || isPickerNode(m)) continue;
+      
+      const r = getCachedBoundingRect(m);
+      if (!r.width || !r.height) continue;
+      
+      const box = document.createElement("div");
+      box.className = locked ? "picker-match-box locked" : "picker-match-box";
+      box.setAttribute("data-picker-ui", "1");
+      
+      // Batch style setting
+      boxElements.push({
+        element: box,
+        left: r.left,
+        top: r.top,
+        width: r.width,
+        height: r.height
+      });
+      
+      fragment.appendChild(box);
+    }
+    
+    // Apply styles in batch
+    for (const {element, left, top, width, height} of boxElements) {
+      element.style.cssText = `left:${left}px;top:${top}px;width:${width}px;height:${height}px`;
+    }
+    
+    matchesLayer.appendChild(fragment);
+    
+    // Update hover box
+    const r0 = getCachedBoundingRect(el);
     if (!r0.width || !r0.height) {
       hoverBox.style.display = "none";
     } else {
-      hoverBox.style.display = "block";
-      hoverBox.style.left = r0.left + "px";
-      hoverBox.style.top = r0.top + "px";
-      hoverBox.style.width = r0.width + "px";
-      hoverBox.style.height = r0.height + "px";
+      hoverBox.style.cssText = `display:block;left:${r0.left}px;top:${r0.top}px;width:${r0.width}px;height:${r0.height}px`;
       hoverBox.classList.toggle("locked", !!locked);
     }
   }
@@ -1235,66 +1285,89 @@
   // ---------- selection & UI updates ----------
   const currentTarget = () => (locked ? lockedTarget : hoveredTarget);
   function computeSelectorsFor(el) {
-    selectorGeneric = buildGeneric(el);
-    selectorSpecific = buildSpecific(el);
+    // Check if we have cached results
+    const cached = selectorCache.get(el);
+    if (cached && cached.generic && cached.specific) {
+      selectorGeneric = cached.generic;
+      selectorSpecific = cached.specific;
+    } else {
+      selectorGeneric = buildGeneric(el);
+      selectorSpecific = buildSpecific(el);
+      
+      // Update cache with both selectors
+      selectorCache.set(el, { 
+        generic: selectorGeneric, 
+        specific: selectorSpecific 
+      });
+    }
     
     // Ensure generic and specific selectors are different
     ensureSelectorDiversity(el);
+    
+    // Update cache with final selectors
+    selectorCache.set(el, { 
+      generic: selectorGeneric, 
+      specific: selectorSpecific 
+    });
   }
   
   function ensureSelectorDiversity(el) {
-    // If selectors are identical, we need to make them serve different purposes
-    if (selectorGeneric === selectorSpecific) {
-      // Strategy 1: Make generic selector broader by removing constraints
-      let broaderGeneric = makeSelectorBroader(selectorGeneric, el);
-      
-      if (broaderGeneric && broaderGeneric !== selectorGeneric) {
-        const matches = document.querySelectorAll(broaderGeneric);
-        if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
-          selectorGeneric = broaderGeneric;
-          return;
-        }
+    // Quick exit if selectors are already different
+    if (selectorGeneric !== selectorSpecific) return;
+    
+    // Strategy 1: Make generic selector broader by removing constraints
+    let broaderGeneric = makeSelectorBroader(selectorGeneric);
+    
+    if (broaderGeneric && broaderGeneric !== selectorGeneric) {
+      const result = testSelector(broaderGeneric, el, 2, 200);
+      if (result.valid) {
+        selectorGeneric = broaderGeneric;
+        return;
       }
-      
-      // Strategy 2: Make specific selector more specific
-      let moreSpecific = makeSelectorMoreSpecific(selectorSpecific, el);
-      
-      if (moreSpecific && moreSpecific !== selectorSpecific) {
-        const matches = document.querySelectorAll(moreSpecific);
-        if (matches.length === 1 && matches[0] === el) {
-          selectorSpecific = moreSpecific;
-          return;
-        }
+    }
+    
+    // Strategy 2: Make specific selector more specific
+    let moreSpecific = makeSelectorMoreSpecific(selectorSpecific, el);
+    
+    if (moreSpecific && moreSpecific !== selectorSpecific) {
+      const result = testSelector(moreSpecific, null, 1, 1);
+      if (result.valid && result.matches && result.matches[0] === el) {
+        selectorSpecific = moreSpecific;
+        return;
       }
-      
-      // Strategy 3: Generate alternative generic selector using different approach
-      let alternativeGeneric = generateAlternativeGeneric(el);
-      
-      if (alternativeGeneric && alternativeGeneric !== selectorSpecific) {
-        const matches = document.querySelectorAll(alternativeGeneric);
-        if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
-          selectorGeneric = alternativeGeneric;
-          return;
-        }
+    }
+    
+    // Strategy 3: Generate alternative generic selector (simplified)
+    const tag = el.tagName.toLowerCase();
+    const parent = el.parentElement;
+    
+    if (parent) {
+      const parentTag = parent.tagName.toLowerCase();
+      const parentChildSelector = `${parentTag} ${tag}`;
+      const result = testSelector(parentChildSelector, el, 2, 200);
+      if (result.valid) {
+        selectorGeneric = parentChildSelector;
+        return;
       }
-      
-      // Strategy 4: If all else fails, use tag-based generic (if not too broad)
-      const tag = el.tagName.toLowerCase();
-      const tagMatches = document.querySelectorAll(tag).length;
-      const broadTags = ['div', 'span', 'p', 'a', 'li', 'td', 'th', 'tr', 'img', 'input', 'button'];
-      
-      if (tagMatches >= 2 && tagMatches <= 200 && !broadTags.includes(tag)) {
+    }
+    
+    // Strategy 4: Use tag-based generic as last resort (if not too broad)
+    const broadTags = ['div', 'span', 'p', 'a', 'li', 'td', 'th', 'tr', 'img', 'input', 'button'];
+    
+    if (!broadTags.includes(tag)) {
+      const tagResult = testSelector(tag, null, 2, 200);
+      if (tagResult.valid) {
         selectorGeneric = tag;
       }
     }
   }
   
-  function makeSelectorBroader(selector, el) {
+  function makeSelectorBroader(selector) {
     // Remove the last part of a descendant selector
     if (selector.includes(' ')) {
       const parts = selector.split(' ');
       if (parts.length > 1) {
-        return parts.slice(1).join(' '); // Remove first part (container)
+        return parts.slice(1).join(' ');
       }
     }
     
@@ -1305,7 +1378,6 @@
         return withoutLastClass;
       }
       
-      // Remove all classes, keep just the tag
       const tagOnly = selector.replace(/\.[^.\s\[]+/g, '').replace(/\[[^\]]+\]/g, '');
       if (tagOnly && tagOnly !== selector) {
         return tagOnly;
@@ -1320,20 +1392,10 @@
       }
     }
     
-    // Remove pseudo-selectors
-    if (selector.includes(':')) {
-      const withoutPseudo = selector.replace(/:[\w-]+(\([^)]*\))?/g, '');
-      if (withoutPseudo && withoutPseudo !== selector) {
-        return withoutPseudo;
-      }
-    }
-    
     return null;
   }
   
   function makeSelectorMoreSpecific(selector, el) {
-    const tag = el.tagName.toLowerCase();
-    
     // Add an ID if element has one and it's not already in the selector
     const id = el.getAttribute('id');
     if (id && !selector.includes('#') && !looksUniqueToken(id)) {
@@ -1341,15 +1403,10 @@
     }
     
     // Add more classes if available
-    const classes = Array.from(el.classList).filter(cls => 
-      !looksUniqueToken(cls) && !selector.includes(`.${cls}`)
-    );
+    const classes = getSemanticClasses(el).filter(cls => !selector.includes(`.${cls}`));
     
     if (classes.length > 0) {
-      const additionalClass = `.${CSS.escape(classes[0])}`;
-      if (!selector.includes(additionalClass)) {
-        return selector + additionalClass;
-      }
+      return selector + `.${CSS.escape(classes[0])}`;
     }
     
     // Add data attributes
@@ -1365,7 +1422,7 @@
     // Add positional specificity as last resort
     const parent = el.parentElement;
     if (parent && !selector.includes(':nth-')) {
-      const siblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
+      const siblings = getSameTagSiblings(el);
       if (siblings.length > 1) {
         const index = siblings.indexOf(el) + 1;
         return `${selector}:nth-of-type(${index})`;
@@ -1375,135 +1432,35 @@
     return null;
   }
   
-  function generateAlternativeGeneric(el) {
-    const tag = el.tagName.toLowerCase();
-    
-    // Strategy 1: Use parent context with tag
-    const parent = el.parentElement;
-    if (parent) {
-      // Try parent tag + current element tag
-      const parentTag = parent.tagName.toLowerCase();
-      const parentChildSelector = `${parentTag} ${tag}`;
-      const matches = document.querySelectorAll(parentChildSelector);
-      if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
-        return parentChildSelector;
+  // Cache DOM queries for UI elements
+  const uiElements = {
+    get genericText() {
+      if (!this._genericText) {
+        this._genericText = results.querySelector(
+          '.picker-row[data-kind="generic"] [data-role="label"] .pill-text'
+        );
       }
-      
-      // Try parent with class + current element tag
-      const parentClasses = Array.from(parent.classList).filter(cls => !looksUniqueToken(cls));
-      if (parentClasses.length > 0) {
-        const parentClassSelector = `${parentTag}.${CSS.escape(parentClasses[0])} ${tag}`;
-        const matches2 = document.querySelectorAll(parentClassSelector);
-        if (matches2.length >= 2 && matches2.length <= 200 && Array.from(matches2).includes(el)) {
-          return parentClassSelector;
-        }
+      return this._genericText;
+    },
+    get specificText() {
+      if (!this._specificText) {
+        this._specificText = results.querySelector(
+          '.picker-row[data-kind="specific"] [data-role="label"] .pill-text'
+        );
       }
+      return this._specificText;
     }
-    
-    // Strategy 2: Use element's role or aria attributes
-    const role = el.getAttribute('role');
-    if (role && !looksUniqueToken(role)) {
-      const roleSelector = `[role="${CSS.escape(role)}"]`;
-      const matches = document.querySelectorAll(roleSelector);
-      if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
-        return roleSelector;
-      }
-    }
-    
-    // Strategy 3: Use element's position in context
-    if (parent) {
-      const tagSiblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
-      const elementIndex = tagSiblings.indexOf(el);
-      
-      if (tagSiblings.length > 1) {
-        if (elementIndex === 0) {
-          const firstChildSelector = `${tag}:first-of-type`;
-          const matches = document.querySelectorAll(firstChildSelector);
-          if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
-            return firstChildSelector;
-          }
-        } else if (elementIndex === tagSiblings.length - 1) {
-          const lastChildSelector = `${tag}:last-of-type`;
-          const matches = document.querySelectorAll(lastChildSelector);
-          if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
-            return lastChildSelector;
-          }
-        }
-      }
-    }
-    
-    // Strategy 4: Use common attribute patterns
-    for (const attr of el.attributes) {
-      if (attr.name === 'type' || attr.name === 'href' || attr.name === 'src') {
-        // For common attributes, try to generalize the value
-        let generalizedValue = generalizeAttributeValue(attr.value);
-        if (generalizedValue) {
-          const generalSelector = `${tag}[${CSS.escape(attr.name)}*="${CSS.escape(generalizedValue)}"]`;
-          const matches = document.querySelectorAll(generalSelector);
-          if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
-            return generalSelector;
-          }
-        }
-      }
-    }
-    
-    return null;
-  }
+  };
   
-  function generalizeAttributeValue(value) {
-    // Extract common patterns from attribute values
-    if (!value) return null;
-    
-    // For URLs, extract domain or path patterns
-    if (value.startsWith('http')) {
-      try {
-        const url = new URL(value);
-        if (url.pathname.length > 1) {
-          // Extract first path segment
-          const pathParts = url.pathname.split('/').filter(p => p);
-          if (pathParts.length > 0) {
-            return pathParts[0];
-          }
-        }
-        return url.hostname;
-      } catch(_) {}
-    }
-    
-    // For class-like values, extract common prefixes
-    if (value.includes('-') || value.includes('_')) {
-      const parts = value.split(/[-_]/);
-      if (parts.length > 1 && parts[0].length > 2) {
-        return parts[0];
-      }
-    }
-    
-    // For file extensions
-    if (value.includes('.')) {
-      const parts = value.split('.');
-      if (parts.length > 1) {
-        const ext = parts[parts.length - 1];
-        if (ext.length <= 4) {
-          return `.${ext}`;
-        }
-      }
-    }
-    
-    return null;
-  }
   function updateResultsUI(targetEl) {
-    const gText = results.querySelector(
-      '.picker-row[data-kind="generic"] [data-role="label"] .pill-text'
-    );
-    const sText = results.querySelector(
-      '.picker-row[data-kind="specific"] [data-role="label"] .pill-text'
-    );
     if (!targetEl) {
       results.style.display = "none";
       results.classList.remove("locked");
       return;
     }
-    gText.textContent = trim(selectorGeneric, PILL_MAX_CHARS);
-    sText.textContent = trim(selectorSpecific, PILL_MAX_CHARS);
+    
+    uiElements.genericText.textContent = trim(selectorGeneric, PILL_MAX_CHARS);
+    uiElements.specificText.textContent = trim(selectorSpecific, PILL_MAX_CHARS);
     results.style.display = "flex";
     results.classList.toggle("locked", !!locked);
   }
@@ -1548,11 +1505,15 @@
         const p = pendingXY;
         pendingXY = null;
         if (!p || !pickMode || locked) return;
+        
         let target = elementFromPointIgnoreUI(p.x, p.y);
         if (!(target instanceof Element)) return;
         if (isPickerNode(target)) return;
+        
         target = snapCandidate(target, p.x, p.y);
+        
         if (!(target instanceof Element)) {
+          // Clear state efficiently
           hoveredTarget = null;
           selectorGeneric = "";
           selectorSpecific = "";
@@ -1562,9 +1523,13 @@
           clearMatches();
           return;
         }
-        hoveredTarget = target;
-        computeSelectorsFor(target);
-        updateVisuals();
+        
+        // Only update if target changed to avoid redundant work
+        if (hoveredTarget !== target) {
+          hoveredTarget = target;
+          computeSelectorsFor(target);
+          updateVisuals();
+        }
       });
     }
   }
@@ -1625,12 +1590,7 @@
     "touchstart",
     (e) => {
       activeTouchCount = e.touches.length;
-      if (!pickMode) return;
-      const t = e.touches[0];
-      if (t) {
-        lastTouchX = t.clientX;
-        lastTouchY = t.clientY;
-      }
+      // Note: Touch coordinates are handled in touchmove for active dragging
     },
     { capture: true }
   );
@@ -2096,30 +2056,27 @@
     }
   });
 
-  // CSS button interactions (hover/tap)
+  // CSS button interactions (hover/tap) - optimized event handling
   results.addEventListener("pointerover", (e) => {
     const cssBtn = e.target.closest('.action-btn[data-action="css"]');
-    if (!cssBtn) return;
+    if (!cssBtn || !locked || overlayPinned) return;
+    
     const row = cssBtn.closest(".picker-row");
     const kind = row?.getAttribute("data-kind");
     if (!kind) return;
-    if (!locked) return;
-    // If user pinned overlay, don't override content/visibility on hover
-    if (overlayPinned) return;
+    
     if (cssOverlayHideTimer) {
       clearTimeout(cssOverlayHideTimer);
       cssOverlayHideTimer = null;
     }
     showCssOverlayFor(kind);
   });
+  
   results.addEventListener("pointerout", (e) => {
     const cssBtn = e.target.closest('.action-btn[data-action="css"]');
-    if (!cssBtn) return;
-    // If pinned, keep it open
-    if (overlayPinned) return;
-    if (cssOverlayHideTimer) {
-      clearTimeout(cssOverlayHideTimer);
-    }
+    if (!cssBtn || overlayPinned) return;
+    
+    if (cssOverlayHideTimer) clearTimeout(cssOverlayHideTimer);
     cssOverlayHideTimer = setTimeout(hideCssOverlay, 160);
   });
   results.addEventListener("click", (e) => {
@@ -2203,26 +2160,32 @@
     }
   });
 
-  // ---------- snapping logic ----------
+  // ---------- snapping logic (optimized) ----------
   const SNAP_EDGE_PX = 12,
     SIMILAR_SIDE_PX = 16,
     SIMILAR_AREA_RATIO = 1.35;
+    
   const rectLike = (a, b) => {
     const aw = a.width,
       ah = a.height,
       bw = b.width,
       bh = b.height;
     if (!aw || !ah || !bw || !bh) return false;
+    
     const similarSides =
       Math.abs(a.left - b.left) <= SIMILAR_SIDE_PX &&
       Math.abs(a.top - b.top) <= SIMILAR_SIDE_PX &&
       Math.abs(a.right - b.right) <= SIMILAR_SIDE_PX &&
       Math.abs(a.bottom - b.bottom) <= SIMILAR_SIDE_PX;
+    
+    if (similarSides) return true;
+    
     const arA = aw * ah,
       arB = bw * bh,
       ratio = arA > arB ? arA / arB : arB / arA;
-    return similarSides || ratio <= SIMILAR_AREA_RATIO;
+    return ratio <= SIMILAR_AREA_RATIO;
   };
+  
   const distToRectEdge = (r, x, y) =>
     Math.min(
       Math.abs(x - r.left),
@@ -2230,25 +2193,32 @@
       Math.abs(y - r.top),
       Math.abs(r.bottom - y)
     );
+    
   const pointInRect = (r, x, y) =>
     x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    
   function nearestBoundaryChild(el, x, y, parentRect) {
-    const n = Math.min(el.children.length, 50);
+    const maxChildren = Math.min(el.children.length, 30); // Reduced from 50
     let best = null,
       bestEdge = Infinity;
-    for (let i = 0; i < n; i++) {
+      
+    for (let i = 0; i < maxChildren; i++) {
       const c = el.children[i];
       if (!(c instanceof Element)) continue;
-      const cr = c.getBoundingClientRect();
+      
+      const cr = getCachedBoundingRect(c);
       if (!cr.width || !cr.height) continue;
       if (!pointInRect(cr, x, y)) continue;
+      
+      const elRect = getCachedBoundingRect(el);
       if (
         !(
-          rectLike(cr, el.getBoundingClientRect()) ||
+          rectLike(cr, elRect) ||
           (parentRect && rectLike(cr, parentRect))
         )
       )
         continue;
+        
       const d = distToRectEdge(cr, x, y);
       if (d <= SNAP_EDGE_PX && d < bestEdge) {
         best = c;
@@ -2257,14 +2227,17 @@
     }
     return best;
   }
+  
   function snapCandidate(el, x, y) {
     if (!(el instanceof Element)) return el;
-    const r = el.getBoundingClientRect(),
-      p = el.parentElement;
+    
+    const r = getCachedBoundingRect(el);
+    const p = el.parentElement;
     let parentPick = null,
       dParent = Infinity;
+      
     if (p && p instanceof Element) {
-      const pr = p.getBoundingClientRect();
+      const pr = getCachedBoundingRect(p);
       const dEdge = distToRectEdge(r, x, y);
       if (dEdge <= SNAP_EDGE_PX && rectLike(pr, r)) {
         parentPick = p;
@@ -2276,14 +2249,16 @@
         );
       }
     }
+    
     const childPick = nearestBoundaryChild(
       el,
       x,
       y,
-      p ? p.getBoundingClientRect() : null
+      p ? getCachedBoundingRect(p) : null
     );
+    
     if (parentPick && childPick) {
-      const cr = childPick.getBoundingClientRect();
+      const cr = getCachedBoundingRect(childPick);
       const dChild = distToRectEdge(cr, x, y);
       return dParent <= dChild ? parentPick : childPick;
     }
@@ -2346,6 +2321,7 @@
   // ---------- scroll sync (hide while scrolling, redraw on settle) ----------
   let scrolling = false,
     scrollTimer = null;
+    
   const onAnyScroll = () => {
     if (!pickMode) return;
     if (!scrolling) {
@@ -2353,24 +2329,24 @@
       hoverBox.style.display = "none";
       clearMatches();
       hideCssOverlay();
-      // keep pills visible so you can still act; hide them too if you prefer:
-      // results.style.display = 'none';
+      // Clear bounding rect cache on scroll since positions change
+      boundingRectCache.clear && boundingRectCache.clear();
     }
     clearTimeout(scrollTimer);
     scrollTimer = setTimeout(() => {
       scrolling = false;
-      if (pickMode) updateVisuals();
+      if (pickMode) {
+        // Clear cache again before redraw
+        boundingRectCache.clear && boundingRectCache.clear();
+        updateVisuals();
+      }
     }, 140);
   };
-  // capture = true to run before site handlers; passive = true to avoid blocking
-  window.addEventListener("scroll", onAnyScroll, {
-    capture: true,
-    passive: true,
-  });
-  document.addEventListener("scroll", onAnyScroll, {
-    capture: true,
-    passive: true,
-  });
+  
+  // Use optimized scroll listener
+  const scrollOptions = { capture: true, passive: true };
+  window.addEventListener("scroll", onAnyScroll, scrollOptions);
+  document.addEventListener("scroll", onAnyScroll, scrollOptions);
 
   // Redraw on resize (debounce not strictly necessary)
   window.addEventListener(
@@ -2399,11 +2375,19 @@
     results.classList.remove("locked");
     hoverBox.style.display = "none";
     clearMatches();
+    
     // Reset any pinned overlay when leaving/entering mode
     overlayPinned = false;
     lastOverlayKind = null;
     clearAllCssButtonActive();
     hideCssOverlay();
+    
+    // Clear caches when toggling modes to prevent stale data
+    if (!pickMode) {
+      boundingRectCache.clear && boundingRectCache.clear();
+      selectorTestCache.clear();
+    }
+    
     applyZoomPolicy();
   }
 
