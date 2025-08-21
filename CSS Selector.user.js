@@ -1467,7 +1467,7 @@
   function updateVisuals() {
     const tgt = currentTarget();
     if (!pickMode || !tgt) {
-      results.style.display = pickMode ? "flex" : "none";
+      results.style.display = "none";
       hoverBox.style.display = "none";
       clearMatches();
       hideCssOverlay();
@@ -1517,10 +1517,7 @@
           hoveredTarget = null;
           selectorGeneric = "";
           selectorSpecific = "";
-          results.style.display = "none";
-          hoverBox.style.display = "none";
-          hoverBox.classList.remove("locked");
-          clearMatches();
+          updateVisuals();
           return;
         }
         
@@ -2371,7 +2368,6 @@
     hoveredTarget = null;
     selectorGeneric = "";
     selectorSpecific = "";
-    results.style.display = "none";
     results.classList.remove("locked");
     hoverBox.style.display = "none";
     clearMatches();
@@ -2388,6 +2384,8 @@
       selectorTestCache.clear();
     }
     
+    // Update visuals based on new mode
+    updateVisuals();
     applyZoomPolicy();
   }
 
