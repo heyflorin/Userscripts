@@ -436,7 +436,7 @@
       position:relative !important;
     }
     #css-selector-picker-root .selector-pill.generic{  background:var(--orange-bg) !important; border:2px solid var(--orange-bd) !important; color:var(--text-light) !important; }
-    #css-selector-picker-root .selector-pill.specific{ background:var(--blue-bg) !important;   border:2px solid var(--blue-bd) !important;   color:var(--text-light) important; }
+    #css-selector-picker-root .selector-pill.specific{ background:var(--blue-bg) !important;   border:2px solid var(--blue-bd) !important;   color:var(--text-light) !important; }
 
     #css-selector-picker-root .picker-results{
       position:fixed!important; right:16px; bottom:20px; z-index:2147483648;
@@ -645,8 +645,104 @@
 
   function buildGeneric(el) {
     if (!(el instanceof Element)) return "*";
-    let sel = finder(el);
-    return sel.replace(/:nth-[^ )]+\(\d+\)/g, "");
+    try {
+      const MAX_SEGMENTS = 4;            // how many ancestor levels to include
+      const MAX_MATCHES_TARGET = 150;     // acceptable upper bound of generic breadth
+      const MIN_MATCHES_TARGET = 2;       // we want at least a couple similar nodes when possible
+      const COMMON_CLASS_MIN_RATIO = 0.3; // class must appear on >=30% of same-tag siblings OR at least 2
+
+      // Helper: pick classes that are common among siblings of the same tag
+      function commonClasses(node) {
+        const out = [];
+        const cls = Array.from(node.classList || []);
+        if (!cls.length) return out;
+        const parent = node.parentElement;
+        if (!parent) return out;
+        const siblings = Array.from(parent.children).filter(c => c.tagName === node.tagName);
+        if (siblings.length <= 1) return out; // nothing to generalize
+        const freq = new Map();
+        for (const sib of siblings) {
+          for (const c of sib.classList) {
+            freq.set(c, (freq.get(c) || 0) + 1);
+          }
+        }
+        const threshold = Math.max(2, Math.ceil(siblings.length * COMMON_CLASS_MIN_RATIO));
+        for (const c of cls) {
+            const n = freq.get(c) || 0;
+            if (n >= threshold) out.push({name:c, count:n});
+        }
+        // Sort by frequency desc then name asc, cap to 3 for brevity
+        out.sort((a,b)=> b.count - a.count || a.name.localeCompare(b.name));
+        return out.slice(0,3).map(o=>o.name);
+      }
+
+      // Build path segments from the element upward (will reverse later)
+      const segments = [];
+      let cur = el;
+      while (cur && cur !== document.documentElement && segments.length < MAX_SEGMENTS) {
+        const tag = cur.tagName.toLowerCase();
+        const classes = commonClasses(cur);
+        let seg = tag;
+        if (classes.length) {
+          seg += classes.map(c => '.' + CSS.escape(c)).join('');
+        }
+        segments.push(seg);
+        cur = cur.parentElement;
+      }
+      // We built bottom-up; reverse to top-down for stability
+      segments.reverse();
+
+      // Progressively refine selector until it's neither too specific nor too broad.
+      let selector = ''; // accumulative descendant chain
+      let usedSegments = [];
+      for (let i=segments.length-1; i>=0; i--) {
+        // Try building selector using the last i+1 segments (closer ancestors + element)
+        usedSegments = segments.slice(i);
+        selector = usedSegments.join(' ');
+        let matches = [];
+        try { matches = document.querySelectorAll(selector); } catch(_) { continue; }
+        const count = matches.length;
+        if (count === 0) continue; // invalid/broken path; skip
+        // If too narrow (only itself) and we still can broaden by dropping earliest ancestor, continue loop.
+        if (count === 1 && i > 0) continue;
+        // Aim for a count within desired window OR (last iteration)
+        if ((count >= MIN_MATCHES_TARGET && count <= MAX_MATCHES_TARGET) || i === 0) break;
+      }
+
+      // If still only 1 match, attempt to broaden by removing specific-only classes (keep only first segment tag names)
+      try {
+        let count = document.querySelectorAll(selector).length;
+        if (count === 1) {
+          const parts = selector.split(/\s+/);
+          // Remove classes from the last segment to see if we get siblings
+            const last = parts[parts.length-1];
+            const broaden = last.replace(/\.[^\.]+/g,'');
+            if (broaden !== last) {
+              const trial = parts.slice(0,-1).concat([broaden]).join(' ');
+              const n = document.querySelectorAll(trial).length;
+              if (n > 1 && n <= MAX_MATCHES_TARGET) selector = trial;
+            }
+        }
+      } catch(_) {}
+
+      // Final safety: ensure element is matched; if not, fall back to original strategy
+      try {
+        const list = document.querySelectorAll(selector);
+        if (!Array.from(list).includes(el)) throw new Error('generic selector lost target');
+      } catch(_) {
+        // fallback to previous simple generic (finder without nth)
+        let sel = finder(el);
+        return sel.replace(/:nth-[^ )]+\(\d+\)/g, "");
+      }
+
+      return selector;
+    } catch (err) {
+      // fallback in error
+      try {
+        let sel = finder(el);
+        return sel.replace(/:nth-[^ )]+\(\d+\)/g, "");
+      } catch (_) { return '*'; }
+    }
   }
   function buildSpecific(el) {
     if (!(el instanceof Element)) return "*";
