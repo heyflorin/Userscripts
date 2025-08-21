@@ -115,33 +115,6 @@
     // Author: Anton Medvedev <anton@medv.io>
     // Source: https://github.com/antonmedv/finder
     const acceptedAttrNames = new Set(['role', 'name', 'aria-label', 'rel', 'href']);
-    const semanticTags = new Set([
-        'article',
-        'section',
-        'nav',
-        'header',
-        'main',
-        'footer',
-        'aside',
-        'figure',
-        'figcaption',
-        'p',
-        'h1',
-        'h2',
-        'h3',
-        'h4',
-        'h5',
-        'h6',
-        'ul',
-        'ol',
-        'li',
-        'form',
-        'label',
-        'button',
-        'input',
-        'textarea',
-        'select',
-    ]);
     /** Check if attribute name and value are word-like. */
     function attr(name, value) {
         let nameIsOk = acceptedAttrNames.has(name);
@@ -258,8 +231,6 @@
     }
     function tie(element, config) {
         const level = [];
-        const tagName = element.tagName.toLowerCase();
-        const isSemantic = semanticTags.has(tagName);
         const elementId = element.getAttribute('id');
         if (elementId && config.idName(elementId)) {
             level.push({
@@ -270,14 +241,9 @@
         for (let i = 0; i < element.classList.length; i++) {
             const name = element.classList[i];
             if (config.className(name)) {
-                const cls = '.' + CSS.escape(name);
                 level.push({
-                    name: cls,
+                    name: '.' + CSS.escape(name),
                     penalty: 1,
-                });
-                level.push({
-                    name: `${tagName}${cls}`,
-                    penalty: isSemantic ? 2 : 5,
                 });
             }
         }
@@ -290,18 +256,19 @@
                 });
             }
         }
-        if (isSemantic && config.tagName(tagName)) {
+        const tagName = element.tagName.toLowerCase();
+        if (config.tagName(tagName)) {
             level.push({
                 name: tagName,
-                penalty: 3,
+                penalty: 5,
             });
-        }
-        const index = indexOf(element, tagName);
-        if (index !== undefined) {
-            level.push({
-                name: nthOfType(tagName, index),
-                penalty: isSemantic ? 10 : 15,
-            });
+            const index = indexOf(element, tagName);
+            if (index !== undefined) {
+                level.push({
+                    name: nthOfType(tagName, index),
+                    penalty: 10,
+                });
+            }
         }
         const nth = indexOf(element);
         if (nth !== undefined) {
@@ -469,8 +436,8 @@
       /* overlay lock icon on the right inside the pill */
       position:relative !important;
     }
-    .selector-pill.generic{  background:var(--orange-bg); border:2px solid var(--orange-bd); color:var(--text-light); }
-    .selector-pill.specific{ background:var(--blue-bg);   border:2px solid var(--blue-bd);   color:var(--text-light); }
+    .selector-pill.generic{  background:var(--orange-bg) !important; border:2px solid var(--orange-bd) !important; color:var(--text-light) !important; }
+    .selector-pill.specific{ background:var(--blue-bg) !important;   border:2px solid var(--blue-bd) !important;   color:var(--text-light) important; }
 
     .picker-results{
       position:fixed!important; right:16px; bottom:20px; z-index:2147483648;
@@ -500,17 +467,17 @@
     /* Overlays (never block) */
     .picker-hover-box{
       position:fixed; z-index:2147483646; pointer-events:none;
-      border:2px dotted rgba(26,115,232,.95) !important; background:rgba(26,115,232,.20);
+      border:1px dotted rgba(26,115,232,.95) !important; background:rgba(26,115,232,.20);
       border-radius:3px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);
       transition:transform .06s ease,width .06s ease,height .06s ease,left .06s ease,top .06s ease;
     }
-    .picker-hover-box.locked{ border-style:solid; }
     .picker-matches-layer{position:fixed;left:0;top:0;width:0;height:0;z-index:2147483645;pointer-events:none;}
     .picker-match-box{
-      position:fixed; pointer-events:none; border:2px dotted rgba(255,140,0,.95) !important;
+      position:fixed; pointer-events:none; border:1px dotted rgba(255,140,0,.95) !important;
       background:rgba(255,140,0,.22); border-radius:3px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.25);
-    }
-    .picker-match-box.locked{ border-style:solid; }
+      }
+      .picker-hover-box.locked{ border-style:solid !important; }
+      .picker-match-box.locked{ border-style:solid !important; }
 
     /* Circular grabber (bottom-left) */
     .picker-grabber{
@@ -564,7 +531,7 @@
     .picker-css-overlay .css-ov-copy{
       appearance:none !important; -webkit-appearance:none !important; border:none !important; outline:none !important;
       background:#2b2f38 !important; color:#fff !important; border:1px solid #1d2129 !important;;
-      padding:0px 9px !important; margin-top: 0px; border-radius:8px !important; cursor:pointer !important; font-weight:700 !important; font-size:12px !important;
+      padding:6px 9px !important; border-radius:8px !important; cursor:pointer !important; font-weight:700 !important; font-size:12px !important;
     }
     .picker-css-overlay .css-ov-copy:active{ transform:translateY(1px) !important; }
     /* Constrain the pre/code area so long CSS output can scroll inside the overlay */
@@ -669,8 +636,6 @@
   let hoveredTarget = null;
   let selectorGeneric = "";
   let selectorSpecific = "";
-  let computeSelectorsTimeout = 0;
-  const DEBOUNCE_MS = 250;
 
   // hover RAF
   let rafScheduledHover = false,
@@ -750,34 +715,11 @@
     }
   }
 
-  function drawHoverBox(el) {
-    clearMatches();
-    const r0 = el.getBoundingClientRect();
-    if (!r0.width || !r0.height) {
-      hoverBox.style.display = "none";
-    } else {
-      hoverBox.style.display = "block";
-      hoverBox.style.left = r0.left + "px";
-      hoverBox.style.top = r0.top + "px";
-      hoverBox.style.width = r0.width + "px";
-      hoverBox.style.height = r0.height + "px";
-      hoverBox.classList.toggle("locked", !!locked);
-    }
-  }
-
   // ---------- selection & UI updates ----------
   const currentTarget = () => (locked ? lockedTarget : hoveredTarget);
   function computeSelectorsFor(el) {
-    selectorGeneric = "";
-    selectorSpecific = "";
-    if (computeSelectorsTimeout) clearTimeout(computeSelectorsTimeout);
-    updateVisuals();
-    computeSelectorsTimeout = setTimeout(() => {
-      if (!(el instanceof Element)) return;
-      selectorGeneric = buildGeneric(el);
-      selectorSpecific = buildSpecific(el);
-      updateVisuals();
-    }, DEBOUNCE_MS);
+    selectorGeneric = buildGeneric(el);
+    selectorSpecific = buildSpecific(el);
   }
   function updateResultsUI(targetEl) {
     const gText = results.querySelector(
@@ -805,19 +747,15 @@
       hideCssOverlay();
       return;
     }
-    if (selectorGeneric) {
-      drawHighlightsFor(tgt, selectorGeneric);
-      updateResultsUI(tgt);
-    } else {
-      drawHoverBox(tgt);
-      results.style.display = "none";
-    }
+    drawHighlightsFor(tgt, selectorGeneric);
+    updateResultsUI(tgt);
   }
   function setLockedTarget(el) {
     if (!(el instanceof Element) || isPickerNode(el)) return false;
     locked = true;
     lockedTarget = el;
     computeSelectorsFor(el);
+    updateVisuals();
     return true;
   }
 
@@ -857,6 +795,7 @@
         }
         hoveredTarget = target;
         computeSelectorsFor(target);
+        updateVisuals();
       });
     }
   }
