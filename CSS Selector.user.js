@@ -645,108 +645,361 @@
 
   function buildGeneric(el) {
     if (!(el instanceof Element)) return "*";
+    
     try {
-      const MAX_SEGMENTS = 4;            // how many ancestor levels to include
-      const MAX_MATCHES_TARGET = 150;     // acceptable upper bound of generic breadth
-      const MIN_MATCHES_TARGET = 2;       // we want at least a couple similar nodes when possible
-      const COMMON_CLASS_MIN_RATIO = 0.3; // class must appear on >=30% of same-tag siblings OR at least 2
-
-      // Helper: pick classes that are common among siblings of the same tag
-      function commonClasses(node) {
-        const out = [];
-        const cls = Array.from(node.classList || []);
-        if (!cls.length) return out;
-        const parent = node.parentElement;
-        if (!parent) return out;
-        const siblings = Array.from(parent.children).filter(c => c.tagName === node.tagName);
-        if (siblings.length <= 1) return out; // nothing to generalize
-        const freq = new Map();
-        for (const sib of siblings) {
-          for (const c of sib.classList) {
-            freq.set(c, (freq.get(c) || 0) + 1);
+      const MAX_MATCHES_TARGET = 200;     // acceptable upper bound of generic breadth
+      const MIN_MATCHES_TARGET = 2;       // we want at least a couple similar nodes
+      const OPTIMAL_MATCHES_TARGET = 20;  // sweet spot for generic selectors
+      
+      // Helper: analyze semantic patterns in attributes and content
+      function getSemanticSignature(node) {
+        const signature = {
+          classes: [],
+          dataAttrs: [],
+          roles: [],
+          contentPattern: null
+        };
+        
+        // Collect semantic classes (avoid generated/unique ones)
+        for (const cls of node.classList) {
+          if (!looksUniqueToken(cls) && /^[a-z][a-z-]*[a-z]$/i.test(cls)) {
+            signature.classes.push(cls);
           }
         }
-        const threshold = Math.max(2, Math.ceil(siblings.length * COMMON_CLASS_MIN_RATIO));
-        for (const c of cls) {
-            const n = freq.get(c) || 0;
-            if (n >= threshold) out.push({name:c, count:n});
+        
+        // Collect semantic data attributes
+        for (const attr of node.attributes) {
+          if (attr.name.startsWith('data-') && !looksUniqueToken(attr.value)) {
+            signature.dataAttrs.push({name: attr.name, value: attr.value});
+          }
+          if (attr.name === 'role' || attr.name === 'aria-label') {
+            signature.roles.push({name: attr.name, value: attr.value});
+          }
         }
-        // Sort by frequency desc then name asc, cap to 3 for brevity
-        out.sort((a,b)=> b.count - a.count || a.name.localeCompare(b.name));
-        return out.slice(0,3).map(o=>o.name);
-      }
-
-      // Build path segments from the element upward (will reverse later)
-      const segments = [];
-      let cur = el;
-      while (cur && cur !== document.documentElement && segments.length < MAX_SEGMENTS) {
-        const tag = cur.tagName.toLowerCase();
-        const classes = commonClasses(cur);
-        let seg = tag;
-        if (classes.length) {
-          seg += classes.map(c => '.' + CSS.escape(c)).join('');
+        
+        // Analyze content patterns for text-heavy elements
+        const text = node.textContent?.trim();
+        if (text && text.length > 0 && text.length < 100) {
+          // Look for patterns like prices, dates, numbers, etc.
+          if (/^\$[\d,]+\.?\d*$/.test(text)) signature.contentPattern = 'price';
+          else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(text)) signature.contentPattern = 'date';
+          else if (/^\d+$/.test(text)) signature.contentPattern = 'number';
+          else if (/^[A-Z][a-z]+ \d+$/.test(text)) signature.contentPattern = 'month-day';
         }
-        segments.push(seg);
-        cur = cur.parentElement;
+        
+        return signature;
       }
-      // We built bottom-up; reverse to top-down for stability
-      segments.reverse();
-
-      // Progressively refine selector until it's neither too specific nor too broad.
-      let selector = ''; // accumulative descendant chain
-      let usedSegments = [];
-      for (let i=segments.length-1; i>=0; i--) {
-        // Try building selector using the last i+1 segments (closer ancestors + element)
-        usedSegments = segments.slice(i);
-        selector = usedSegments.join(' ');
-        let matches = [];
-        try { matches = document.querySelectorAll(selector); } catch(_) { continue; }
+      
+      // Helper: find the best semantic container for similar elements
+      function findSemanticContainer(element) {
+        let current = element.parentElement;
+        const candidates = [];
+        
+        while (current && current !== document.documentElement) {
+          const children = Array.from(current.children);
+          const sameTagSiblings = children.filter(c => c.tagName === element.tagName);
+          
+          if (sameTagSiblings.length >= 2) {
+            // Analyze semantic similarity among siblings
+            const signatures = sameTagSiblings.map(getSemanticSignature);
+            const commonClasses = findCommonClasses(signatures);
+            const commonDataAttrs = findCommonDataAttrs(signatures);
+            const hasContentPattern = signatures.some(s => s.contentPattern);
+            
+            const score = calculateContainerScore(current, sameTagSiblings.length, commonClasses, commonDataAttrs, hasContentPattern);
+            candidates.push({
+              container: current,
+              siblings: sameTagSiblings,
+              commonClasses,
+              commonDataAttrs,
+              score
+            });
+          }
+          current = current.parentElement;
+        }
+        
+        // Return the best container (highest score)
+        candidates.sort((a, b) => b.score - a.score);
+        return candidates[0] || null;
+      }
+      
+      function findCommonClasses(signatures) {
+        if (signatures.length < 2) return [];
+        const classCounts = new Map();
+        signatures.forEach(sig => {
+          sig.classes.forEach(cls => {
+            classCounts.set(cls, (classCounts.get(cls) || 0) + 1);
+          });
+        });
+        
+        const threshold = Math.max(2, Math.ceil(signatures.length * 0.6)); // 60% threshold
+        return Array.from(classCounts.entries())
+          .filter(([cls, count]) => count >= threshold)
+          .map(([cls]) => cls)
+          .slice(0, 3); // Limit to top 3
+      }
+      
+      function findCommonDataAttrs(signatures) {
+        if (signatures.length < 2) return [];
+        const attrCounts = new Map();
+        signatures.forEach(sig => {
+          sig.dataAttrs.forEach(attr => {
+            const key = `${attr.name}=${attr.value}`;
+            attrCounts.set(key, (attrCounts.get(key) || 0) + 1);
+          });
+        });
+        
+        const threshold = Math.max(2, Math.ceil(signatures.length * 0.8)); // 80% threshold for data attrs
+        return Array.from(attrCounts.entries())
+          .filter(([key, count]) => count >= threshold)
+          .map(([key]) => {
+            const [name, value] = key.split('=');
+            return {name, value};
+          })
+          .slice(0, 2); // Limit to top 2
+      }
+      
+      function calculateContainerScore(container, siblingCount, commonClasses, commonDataAttrs, hasContentPattern) {
+        let score = 0;
+        
+        // Base score from sibling count (more siblings = better for generic selection)
+        score += Math.min(siblingCount * 10, 100);
+        
+        // Bonus for semantic indicators
+        score += commonClasses.length * 15;
+        score += commonDataAttrs.length * 20;
+        if (hasContentPattern) score += 25;
+        
+        // Bonus for semantic container tags
+        const tag = container.tagName.toLowerCase();
+        if (['ul', 'ol', 'nav', 'section', 'main', 'article'].includes(tag)) score += 30;
+        if (['div'].includes(tag)) score += 5; // slight preference for divs over generic containers
+        
+        // Penalty for deeply nested structures (prefer higher-level containers)
+        let depth = 0;
+        let current = container;
+        while (current && current !== document.body) {
+          depth++;
+          current = current.parentElement;
+        }
+        score -= Math.max(0, depth - 3) * 5;
+        
+        return score;
+      }
+      
+      // Main algorithm: build generic selector
+      const containerInfo = findSemanticContainer(el);
+      
+      if (!containerInfo) {
+        // Fallback: no good container found, use simple tag-based approach
+        const tag = el.tagName.toLowerCase();
+        const ownSignature = getSemanticSignature(el);
+        
+        let selector = tag;
+        if (ownSignature.classes.length > 0) {
+          selector += '.' + ownSignature.classes.slice(0, 2).map(c => CSS.escape(c)).join('.');
+        }
+        
+        // Test this simple selector
+        try {
+          const matches = document.querySelectorAll(selector);
+          if (matches.length >= MIN_MATCHES_TARGET && matches.length <= MAX_MATCHES_TARGET) {
+            return selector;
+          }
+        } catch(_) {}
+        
+        // Ultimate fallback
+        return tag;
+      }
+      
+      // Build selector using container context
+      const { container, commonClasses, commonDataAttrs } = containerInfo;
+      const targetTag = el.tagName.toLowerCase();
+      
+      // Start with container selector
+      let containerSelector = getMinimalContainerSelector(container);
+      
+      // Build target element selector
+      let targetSelector = targetTag;
+      if (commonClasses.length > 0) {
+        targetSelector += '.' + commonClasses.map(c => CSS.escape(c)).join('.');
+      }
+      if (commonDataAttrs.length > 0) {
+        targetSelector += commonDataAttrs.map(attr => 
+          `[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`
+        ).join('');
+      }
+      
+      // Combine with appropriate combinator
+      const fullSelector = containerSelector ? `${containerSelector} ${targetSelector}` : targetSelector;
+      
+      // Test and validate
+      try {
+        const matches = document.querySelectorAll(fullSelector);
         const count = matches.length;
-        if (count === 0) continue; // invalid/broken path; skip
-        // If too narrow (only itself) and we still can broaden by dropping earliest ancestor, continue loop.
-        if (count === 1 && i > 0) continue;
-        // Aim for a count within desired window OR (last iteration)
-        if ((count >= MIN_MATCHES_TARGET && count <= MAX_MATCHES_TARGET) || i === 0) break;
-      }
-
-      // If still only 1 match, attempt to broaden by removing specific-only classes (keep only first segment tag names)
-      try {
-        let count = document.querySelectorAll(selector).length;
-        if (count === 1) {
-          const parts = selector.split(/\s+/);
-          // Remove classes from the last segment to see if we get siblings
-            const last = parts[parts.length-1];
-            const broaden = last.replace(/\.[^\.]+/g,'');
-            if (broaden !== last) {
-              const trial = parts.slice(0,-1).concat([broaden]).join(' ');
-              const n = document.querySelectorAll(trial).length;
-              if (n > 1 && n <= MAX_MATCHES_TARGET) selector = trial;
-            }
+        
+        if (count >= MIN_MATCHES_TARGET && count <= MAX_MATCHES_TARGET && Array.from(matches).includes(el)) {
+          return fullSelector;
         }
+        
+        // If too specific, try without container
+        if (count < MIN_MATCHES_TARGET) {
+          const matches2 = document.querySelectorAll(targetSelector);
+          if (matches2.length >= MIN_MATCHES_TARGET && matches2.length <= MAX_MATCHES_TARGET) {
+            return targetSelector;
+          }
+        }
+        
+        // If still too specific, try just tag + first common class
+        if (commonClasses.length > 0) {
+          const simpleSelector = `${targetTag}.${CSS.escape(commonClasses[0])}`;
+          const matches3 = document.querySelectorAll(simpleSelector);
+          if (matches3.length >= MIN_MATCHES_TARGET && matches3.length <= MAX_MATCHES_TARGET) {
+            return simpleSelector;
+          }
+        }
+        
       } catch(_) {}
-
-      // Final safety: ensure element is matched; if not, fall back to original strategy
-      try {
-        const list = document.querySelectorAll(selector);
-        if (!Array.from(list).includes(el)) throw new Error('generic selector lost target');
-      } catch(_) {
-        // fallback to previous simple generic (finder without nth)
-        let sel = finder(el);
-        return sel.replace(/:nth-[^ )]+\(\d+\)/g, "");
-      }
-
-      return selector;
+      
+      // Fallback to tag-only
+      return targetTag;
+      
     } catch (err) {
-      // fallback in error
+      // Ultimate fallback
       try {
         let sel = finder(el);
-        return sel.replace(/:nth-[^ )]+\(\d+\)/g, "");
-      } catch (_) { return '*'; }
+        return sel.replace(/:nth-[^(]+\([^)]+\)/g, "");
+      } catch (_) { 
+        return el.tagName.toLowerCase(); 
+      }
     }
   }
+  
+  function getMinimalContainerSelector(container) {
+    const tag = container.tagName.toLowerCase();
+    
+    // Try ID first (if semantic)
+    const id = container.getAttribute('id');
+    if (id && !looksUniqueToken(id) && /^[a-z][a-z0-9-]*$/i.test(id)) {
+      return `#${CSS.escape(id)}`;
+    }
+    
+    // Try semantic classes
+    const semanticClasses = [];
+    for (const cls of container.classList) {
+      if (!looksUniqueToken(cls) && /^[a-z][a-z-]*$/i.test(cls)) {
+        semanticClasses.push(cls);
+      }
+    }
+    
+    if (semanticClasses.length > 0) {
+      return `${tag}.${CSS.escape(semanticClasses[0])}`;
+    }
+    
+    // Try semantic data attributes
+    for (const attr of container.attributes) {
+      if (attr.name.startsWith('data-') && !looksUniqueToken(attr.value) && attr.value.length < 20) {
+        return `${tag}[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`;
+      }
+    }
+    
+    // For semantic HTML5 tags, tag alone might be sufficient
+    if (['nav', 'main', 'article', 'section', 'header', 'footer', 'aside'].includes(tag)) {
+      return tag;
+    }
+    
+    return ''; // No good container selector found
+  }
+
   function buildSpecific(el) {
     if (!(el instanceof Element)) return "*";
-    return finder(el);
+    
+    try {
+      // Try to build a specific selector using stable attributes
+      const tag = el.tagName.toLowerCase();
+      
+      // Priority 1: Unique ID (if not generated/random)
+      const id = el.getAttribute('id');
+      if (id && !looksUniqueToken(id)) {
+        return `#${CSS.escape(id)}`;
+      }
+      
+      // Priority 2: Unique data attributes
+      for (const attr of el.attributes) {
+        if (attr.name.startsWith('data-') && !looksUniqueToken(attr.value)) {
+          const selector = `[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`;
+          try {
+            if (document.querySelectorAll(selector).length === 1) {
+              return selector;
+            }
+          } catch(_) {}
+        }
+      }
+      
+      // Priority 3: Unique combination of stable classes
+      const stableClasses = Array.from(el.classList).filter(cls => 
+        !looksUniqueToken(cls) && /^[a-z][a-z-]*$/i.test(cls)
+      );
+      
+      if (stableClasses.length > 0) {
+        for (let i = 1; i <= Math.min(stableClasses.length, 3); i++) {
+          const classCombo = stableClasses.slice(0, i).map(c => `.${CSS.escape(c)}`).join('');
+          const selector = `${tag}${classCombo}`;
+          try {
+            const matches = document.querySelectorAll(selector);
+            if (matches.length === 1) {
+              return selector;
+            } else if (matches.length > 1 && matches.length <= 10) {
+              // Add parent context to make it unique
+              const parent = el.parentElement;
+              if (parent) {
+                const parentSelector = getMinimalContainerSelector(parent);
+                if (parentSelector) {
+                  const contextSelector = `${parentSelector} ${selector}`;
+                  try {
+                    if (document.querySelectorAll(contextSelector).length === 1) {
+                      return contextSelector;
+                    }
+                  } catch(_) {}
+                }
+              }
+            }
+          } catch(_) {}
+        }
+      }
+      
+      // Priority 4: Use finder library with optimization
+      let finderResult = finder(el);
+      
+      // Try to simplify finder result by removing unnecessary nth-child selectors
+      const simplified = finderResult.replace(/:nth-child\(\d+\)(?=\s|$)/g, '');
+      if (simplified !== finderResult) {
+        try {
+          const matches = document.querySelectorAll(simplified);
+          if (matches.length === 1) {
+            return simplified;
+          }
+        } catch(_) {}
+      }
+      
+      return finderResult;
+      
+    } catch (err) {
+      // Final fallback to finder
+      try {
+        return finder(el);
+      } catch (_) {
+        // Ultimate fallback - this should rarely happen
+        const tag = el.tagName.toLowerCase();
+        const parent = el.parentElement;
+        if (parent) {
+          const siblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
+          const index = siblings.indexOf(el) + 1;
+          return `${tag}:nth-of-type(${index})`;
+        }
+        return tag;
+      }
+    }
   }
 
   // ---------- overlays ----------
