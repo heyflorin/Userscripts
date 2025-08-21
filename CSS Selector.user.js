@@ -750,13 +750,28 @@
     }
   }
 
+  function drawHoverBox(el) {
+    clearMatches();
+    const r0 = el.getBoundingClientRect();
+    if (!r0.width || !r0.height) {
+      hoverBox.style.display = "none";
+    } else {
+      hoverBox.style.display = "block";
+      hoverBox.style.left = r0.left + "px";
+      hoverBox.style.top = r0.top + "px";
+      hoverBox.style.width = r0.width + "px";
+      hoverBox.style.height = r0.height + "px";
+      hoverBox.classList.toggle("locked", !!locked);
+    }
+  }
+
   // ---------- selection & UI updates ----------
   const currentTarget = () => (locked ? lockedTarget : hoveredTarget);
   function computeSelectorsFor(el) {
     selectorGeneric = "";
     selectorSpecific = "";
-    results.style.display = "none";
     if (computeSelectorsTimeout) clearTimeout(computeSelectorsTimeout);
+    updateVisuals();
     computeSelectorsTimeout = setTimeout(() => {
       if (!(el instanceof Element)) return;
       selectorGeneric = buildGeneric(el);
@@ -790,8 +805,13 @@
       hideCssOverlay();
       return;
     }
-    drawHighlightsFor(tgt, selectorGeneric);
-    updateResultsUI(tgt);
+    if (selectorGeneric) {
+      drawHighlightsFor(tgt, selectorGeneric);
+      updateResultsUI(tgt);
+    } else {
+      drawHoverBox(tgt);
+      results.style.display = "none";
+    }
   }
   function setLockedTarget(el) {
     if (!(el instanceof Element) || isPickerNode(el)) return false;
