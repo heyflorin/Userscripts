@@ -172,14 +172,14 @@
     /* Overlays (never block) */
     .picker-hover-box{
       position:fixed; z-index:2147483646; pointer-events:none;
-      border:2px dotted rgba(26,115,232,.95); background:rgba(26,115,232,.20);
+      border:2px dotted rgba(26,115,232,.95) !important; background:rgba(26,115,232,.20);
       border-radius:3px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);
       transition:transform .06s ease,width .06s ease,height .06s ease,left .06s ease,top .06s ease;
     }
     .picker-hover-box.locked{ border-style:solid; }
     .picker-matches-layer{position:fixed;left:0;top:0;width:0;height:0;z-index:2147483645;pointer-events:none;}
     .picker-match-box{
-      position:fixed; pointer-events:none; border:2px dotted rgba(255,140,0,.95);
+      position:fixed; pointer-events:none; border:2px dotted rgba(255,140,0,.95) !important;
       background:rgba(255,140,0,.22); border-radius:3px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.25);
     }
     .picker-match-box.locked{ border-style:solid; }
@@ -203,7 +203,7 @@
       background:transparent; pointer-events:auto;
     }
     .picker-swipe-zone.disabled{ pointer-events:none; }
-    .selector-pill .pill-text{ display:block; overflow:hidden; text-overflow:ellipsis; }
+    .selector-pill .pill-text{ display:block; overflow:hidden; text-overflow:ellipsis; word-break:break-all; white-space:nowrap;}
     .selector-pill .pill-lock{
       display:none; align-items:center; justify-content:center;
       position:absolute; right:0px; top:0px;
@@ -225,24 +225,23 @@
       /* Make the overlay itself scrollable and constrain height to viewport */
       max-height:60vh;
       overflow:scroll;
-      font-size: 8px;
     }
     .picker-css-overlay .css-ov-header{
-      display:flex; align-items:center; justify-content:space-between;
-      gap:8px; padding:15px 17px; background:rgba(255,255,255,.04);
-      border-bottom:1px solid rgba(255,255,255,.08);
-      font-family:var(--font); font-weight:700; font-size:13px;
+      display:flex !important; align-items:center !important; justify-content:space-between !important;
+      gap:8px !important; padding:10px 14px !important; background:rgba(255,255,255,.04) !important;
+      border-bottom:1px solid rgba(255,255,255,.08) !important;
+      font-family:var(--font) !important; font-weight:700 !important; font-size:13px !important;
     }
-    .picker-css-overlay .css-ov-title{ opacity:.85; }
+    .picker-css-overlay .css-ov-title{ opacity:.85 !important; }
     .picker-css-overlay .css-ov-copy{
-      appearance:none; -webkit-appearance:none; border:none; outline:none;
-      background:#2b2f38; color:#fff; border:1px solid #1d2129;
-      padding:6px 9px; border-radius:8px; cursor:pointer; font-weight:700; font-size:12px;
+      appearance:none !important; -webkit-appearance:none !important; border:none !important; outline:none !important;
+      background:#2b2f38 !important; color:#fff !important; border:1px solid #1d2129 !important;;
+      padding:6px 9px !important; border-radius:8px !important; cursor:pointer !important; font-weight:700 !important; font-size:12px !important;
     }
-    .picker-css-overlay .css-ov-copy:active{ transform:translateY(1px); }
+    .picker-css-overlay .css-ov-copy:active{ transform:translateY(1px) !important; }
     /* Constrain the pre/code area so long CSS output can scroll inside the overlay */
-    .picker-css-overlay pre{ margin:0; padding:12px 14px; overflow:auto; max-height:calc(60vh - 56px); }
-    .picker-css-overlay code{ display:block; white-space:pre; padding:12px; overflow:auto; word-break:break-word; }
+    .picker-css-overlay pre{ margin:0 !important; padding:8px 16px !important; background: inherit !important; border: none !important; color: inherit !important;}
+    .picker-css-overlay code{ font-size: 10px !important; max-width: 340px !important; white-space: nowrap; text-overflow: ellipsis; display:block !important; border: none !important; white-space:pre !important; padding:8px !important; overflow-y:auto !important; overflow-x: hidden !important; word-break:break-word !important; background:inherit !important;}
     .picker-css-overlay { /* keep existing behavior for other axes */ }
   `);
 
