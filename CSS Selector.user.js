@@ -94,8 +94,11 @@
       ? (s) => CSS.escape(s)
       : (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, (ch) => "\\" + ch);
   const PILL_MAX_CHARS = 100;
-  const trim = (s, n = PILL_MAX_CHARS) =>
-    s.length <= n ? s : s.slice(0, n - 1) + "…";
+  const trim = (s, n = PILL_MAX_CHARS) => {
+    if (s == null) return "";
+    const str = String(s);
+    return str.length <= n ? str : str.slice(0, n - 1) + "…";
+  };
   const looksUniqueToken = (v) => {
     if (!v) return false;
     const s = String(v);
@@ -1457,7 +1460,7 @@
       results.style.display = "none";
       results.classList.remove("locked");
       return;
-    }
+    } else
     
     uiElements.genericText.textContent = trim(selectorGeneric, PILL_MAX_CHARS);
     uiElements.specificText.textContent = trim(selectorSpecific, PILL_MAX_CHARS);
