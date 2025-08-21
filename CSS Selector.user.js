@@ -487,11 +487,6 @@
     }
     #css-selector-picker-root .picker-grabber.active{ background:var(--grabber-active); }
 
-    #css-selector-picker-root .picker-swipe-zone{
-      position:fixed; left:0; bottom:0; width:28vw; height:28vh; z-index:2147483643;
-      background:transparent; pointer-events:auto;
-    }
-    #css-selector-picker-root .picker-swipe-zone.disabled{ pointer-events:none; }
     #css-selector-picker-root .selector-pill .pill-text{ display:block; overflow:hidden; text-overflow:ellipsis; word-break:break-all; white-space:nowrap;}
     #css-selector-picker-root .selector-pill .pill-lock{
       display:none; align-items:center; justify-content:center;
@@ -579,18 +574,13 @@
   matchesLayer.setAttribute("data-picker-ui", "1");
   pickerRoot.appendChild(matchesLayer);
 
-  // Grabber + swipe zone
+  // Grabber
   const grabber = document.createElement("div");
   grabber.className = "picker-grabber";
   grabber.setAttribute("data-picker-ui", "1");
   grabber.setAttribute("title", "Start/Stop Picker");
   grabber.textContent = "⊹";
   pickerRoot.appendChild(grabber);
-
-  const swipeZone = document.createElement("div");
-  swipeZone.className = "picker-swipe-zone";
-  swipeZone.setAttribute("data-picker-ui", "1");
-  pickerRoot.appendChild(swipeZone);
 
   // Computed CSS overlay
   const cssOverlay = document.createElement("div");
@@ -1610,7 +1600,7 @@
     { capture: true, passive: true }
   );
 
-  // ---------- mode toggles (grabber + swipe zone + hotkey) ----------
+  // ---------- mode toggles (grabber + hotkey) ----------
   function applyZoomPolicy() {
     if (pickMode) enableZoomSuppression();
     else disableZoomSuppression();
@@ -1619,7 +1609,6 @@
   function setPickMode(on) {
     pickMode = !!on;
     grabber.classList.toggle("active", pickMode);
-    swipeZone.classList.toggle("disabled", pickMode);
     locked = false;
     lockedTarget = null;
     hoveredTarget = null;
@@ -1647,54 +1636,6 @@
     },
     { passive: false }
   );
-
-  // Swipe logic (open when picker off; close when on)
-  function installSwipeOpenClose(el) {
-    let sx = 0,
-      sy = 0,
-      down = false;
-    const THRESH = 28;
-    el.addEventListener(
-      "pointerdown",
-      (e) => {
-        if (el.classList.contains("disabled")) return;
-        sx = e.clientX;
-        sy = e.clientY;
-        down = true;
-      },
-      { passive: true }
-    );
-    el.addEventListener(
-      "pointermove",
-      (e) => {
-        if (!down || el.classList.contains("disabled")) return;
-        const dx = e.clientX - sx || 0,
-          dy = e.clientY - sy || 0;
-        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) >= THRESH) {
-          if (!pickMode && dx > 0) setPickMode(true);
-          if (pickMode && dx < 0) setPickMode(false);
-          down = false;
-        }
-      },
-      { passive: true }
-    );
-    el.addEventListener(
-      "pointerup",
-      () => {
-        down = false;
-      },
-      { passive: true }
-    );
-    el.addEventListener(
-      "pointercancel",
-      () => {
-        down = false;
-      },
-      { passive: true }
-    );
-  }
-  installSwipeOpenClose(grabber);
-  installSwipeOpenClose(swipeZone);
 
   // Hotkey
   document.addEventListener(
