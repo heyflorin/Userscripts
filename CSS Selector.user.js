@@ -531,7 +531,7 @@
     .picker-css-overlay .css-ov-copy{
       appearance:none !important; -webkit-appearance:none !important; border:none !important; outline:none !important;
       background:#2b2f38 !important; color:#fff !important; border:1px solid #1d2129 !important;;
-      padding:6px 9px !important; border-radius:8px !important; cursor:pointer !important; font-weight:700 !important; font-size:12px !important;
+      padding:0px 9px !important; margin-top: 0px; border-radius:8px !important; cursor:pointer !important; font-weight:700 !important; font-size:12px !important;
     }
     .picker-css-overlay .css-ov-copy:active{ transform:translateY(1px) !important; }
     /* Constrain the pre/code area so long CSS output can scroll inside the overlay */
