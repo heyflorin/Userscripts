@@ -35,7 +35,7 @@
   // 3) Your CSS (inline here; or assemble dynamically)
   const CSS = `
 
-    #main-content > shreddit-feed {
+    [devicetype="desktop"] #main-content > shreddit-feed {
     display: block !important;
     column-count: 2 !important;
     column-gap: 2rem !important;
@@ -46,7 +46,7 @@
     -moz-column-gap: 1rem !important;
     }
 
-    #main-content > shreddit-feed > article {
+    [devicetype="desktop"] #main-content > shreddit-feed > article {
     break-inside: avoid !important;
     break-inside: avoid-column !important;
     -webkit-column-break-inside: avoid !important;
@@ -56,11 +56,11 @@
     max-width: 100% !important;
     }
 
-    #main-content > shreddit-feed > hr {
+    [devicetype="desktop"] #main-content > shreddit-feed > hr {
         display: none !important;
     }
 
-    #main-content > shreddit-feed > article {
+    [devicetype="desktop"] #main-content > shreddit-feed > article {
         padding-top: 0px !important;
         margin-top: 0px !important;
         padding-bottom: 5px !important;
