@@ -1237,6 +1237,258 @@
   function computeSelectorsFor(el) {
     selectorGeneric = buildGeneric(el);
     selectorSpecific = buildSpecific(el);
+    
+    // Ensure generic and specific selectors are different
+    ensureSelectorDiversity(el);
+  }
+  
+  function ensureSelectorDiversity(el) {
+    // If selectors are identical, we need to make them serve different purposes
+    if (selectorGeneric === selectorSpecific) {
+      // Strategy 1: Make generic selector broader by removing constraints
+      let broaderGeneric = makeSelectorBroader(selectorGeneric, el);
+      
+      if (broaderGeneric && broaderGeneric !== selectorGeneric) {
+        const matches = document.querySelectorAll(broaderGeneric);
+        if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
+          selectorGeneric = broaderGeneric;
+          return;
+        }
+      }
+      
+      // Strategy 2: Make specific selector more specific
+      let moreSpecific = makeSelectorMoreSpecific(selectorSpecific, el);
+      
+      if (moreSpecific && moreSpecific !== selectorSpecific) {
+        const matches = document.querySelectorAll(moreSpecific);
+        if (matches.length === 1 && matches[0] === el) {
+          selectorSpecific = moreSpecific;
+          return;
+        }
+      }
+      
+      // Strategy 3: Generate alternative generic selector using different approach
+      let alternativeGeneric = generateAlternativeGeneric(el);
+      
+      if (alternativeGeneric && alternativeGeneric !== selectorSpecific) {
+        const matches = document.querySelectorAll(alternativeGeneric);
+        if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
+          selectorGeneric = alternativeGeneric;
+          return;
+        }
+      }
+      
+      // Strategy 4: If all else fails, use tag-based generic (if not too broad)
+      const tag = el.tagName.toLowerCase();
+      const tagMatches = document.querySelectorAll(tag).length;
+      const broadTags = ['div', 'span', 'p', 'a', 'li', 'td', 'th', 'tr', 'img', 'input', 'button'];
+      
+      if (tagMatches >= 2 && tagMatches <= 200 && !broadTags.includes(tag)) {
+        selectorGeneric = tag;
+      }
+    }
+  }
+  
+  function makeSelectorBroader(selector, el) {
+    // Remove the last part of a descendant selector
+    if (selector.includes(' ')) {
+      const parts = selector.split(' ');
+      if (parts.length > 1) {
+        return parts.slice(1).join(' '); // Remove first part (container)
+      }
+    }
+    
+    // Remove classes from the selector
+    if (selector.includes('.')) {
+      const withoutLastClass = selector.replace(/\.[^.\s\[]+$/, '');
+      if (withoutLastClass && withoutLastClass !== selector) {
+        return withoutLastClass;
+      }
+      
+      // Remove all classes, keep just the tag
+      const tagOnly = selector.replace(/\.[^.\s\[]+/g, '').replace(/\[[^\]]+\]/g, '');
+      if (tagOnly && tagOnly !== selector) {
+        return tagOnly;
+      }
+    }
+    
+    // Remove attribute selectors
+    if (selector.includes('[')) {
+      const withoutAttrs = selector.replace(/\[[^\]]+\]/g, '');
+      if (withoutAttrs && withoutAttrs !== selector) {
+        return withoutAttrs;
+      }
+    }
+    
+    // Remove pseudo-selectors
+    if (selector.includes(':')) {
+      const withoutPseudo = selector.replace(/:[\w-]+(\([^)]*\))?/g, '');
+      if (withoutPseudo && withoutPseudo !== selector) {
+        return withoutPseudo;
+      }
+    }
+    
+    return null;
+  }
+  
+  function makeSelectorMoreSpecific(selector, el) {
+    const tag = el.tagName.toLowerCase();
+    
+    // Add an ID if element has one and it's not already in the selector
+    const id = el.getAttribute('id');
+    if (id && !selector.includes('#') && !looksUniqueToken(id)) {
+      return `#${CSS.escape(id)}`;
+    }
+    
+    // Add more classes if available
+    const classes = Array.from(el.classList).filter(cls => 
+      !looksUniqueToken(cls) && !selector.includes(`.${cls}`)
+    );
+    
+    if (classes.length > 0) {
+      const additionalClass = `.${CSS.escape(classes[0])}`;
+      if (!selector.includes(additionalClass)) {
+        return selector + additionalClass;
+      }
+    }
+    
+    // Add data attributes
+    for (const attr of el.attributes) {
+      if (attr.name.startsWith('data-') && !looksUniqueToken(attr.value)) {
+        const attrSelector = `[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`;
+        if (!selector.includes(attrSelector)) {
+          return selector + attrSelector;
+        }
+      }
+    }
+    
+    // Add positional specificity as last resort
+    const parent = el.parentElement;
+    if (parent && !selector.includes(':nth-')) {
+      const siblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
+      if (siblings.length > 1) {
+        const index = siblings.indexOf(el) + 1;
+        return `${selector}:nth-of-type(${index})`;
+      }
+    }
+    
+    return null;
+  }
+  
+  function generateAlternativeGeneric(el) {
+    const tag = el.tagName.toLowerCase();
+    
+    // Strategy 1: Use parent context with tag
+    const parent = el.parentElement;
+    if (parent) {
+      // Try parent tag + current element tag
+      const parentTag = parent.tagName.toLowerCase();
+      const parentChildSelector = `${parentTag} ${tag}`;
+      const matches = document.querySelectorAll(parentChildSelector);
+      if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
+        return parentChildSelector;
+      }
+      
+      // Try parent with class + current element tag
+      const parentClasses = Array.from(parent.classList).filter(cls => !looksUniqueToken(cls));
+      if (parentClasses.length > 0) {
+        const parentClassSelector = `${parentTag}.${CSS.escape(parentClasses[0])} ${tag}`;
+        const matches2 = document.querySelectorAll(parentClassSelector);
+        if (matches2.length >= 2 && matches2.length <= 200 && Array.from(matches2).includes(el)) {
+          return parentClassSelector;
+        }
+      }
+    }
+    
+    // Strategy 2: Use element's role or aria attributes
+    const role = el.getAttribute('role');
+    if (role && !looksUniqueToken(role)) {
+      const roleSelector = `[role="${CSS.escape(role)}"]`;
+      const matches = document.querySelectorAll(roleSelector);
+      if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
+        return roleSelector;
+      }
+    }
+    
+    // Strategy 3: Use element's position in context
+    if (parent) {
+      const tagSiblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
+      const elementIndex = tagSiblings.indexOf(el);
+      
+      if (tagSiblings.length > 1) {
+        if (elementIndex === 0) {
+          const firstChildSelector = `${tag}:first-of-type`;
+          const matches = document.querySelectorAll(firstChildSelector);
+          if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
+            return firstChildSelector;
+          }
+        } else if (elementIndex === tagSiblings.length - 1) {
+          const lastChildSelector = `${tag}:last-of-type`;
+          const matches = document.querySelectorAll(lastChildSelector);
+          if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
+            return lastChildSelector;
+          }
+        }
+      }
+    }
+    
+    // Strategy 4: Use common attribute patterns
+    for (const attr of el.attributes) {
+      if (attr.name === 'type' || attr.name === 'href' || attr.name === 'src') {
+        // For common attributes, try to generalize the value
+        let generalizedValue = generalizeAttributeValue(attr.value);
+        if (generalizedValue) {
+          const generalSelector = `${tag}[${CSS.escape(attr.name)}*="${CSS.escape(generalizedValue)}"]`;
+          const matches = document.querySelectorAll(generalSelector);
+          if (matches.length >= 2 && matches.length <= 200 && Array.from(matches).includes(el)) {
+            return generalSelector;
+          }
+        }
+      }
+    }
+    
+    return null;
+  }
+  
+  function generalizeAttributeValue(value) {
+    // Extract common patterns from attribute values
+    if (!value) return null;
+    
+    // For URLs, extract domain or path patterns
+    if (value.startsWith('http')) {
+      try {
+        const url = new URL(value);
+        if (url.pathname.length > 1) {
+          // Extract first path segment
+          const pathParts = url.pathname.split('/').filter(p => p);
+          if (pathParts.length > 0) {
+            return pathParts[0];
+          }
+        }
+        return url.hostname;
+      } catch(_) {}
+    }
+    
+    // For class-like values, extract common prefixes
+    if (value.includes('-') || value.includes('_')) {
+      const parts = value.split(/[-_]/);
+      if (parts.length > 1 && parts[0].length > 2) {
+        return parts[0];
+      }
+    }
+    
+    // For file extensions
+    if (value.includes('.')) {
+      const parts = value.split('.');
+      if (parts.length > 1) {
+        const ext = parts[parts.length - 1];
+        if (ext.length <= 4) {
+          return `.${ext}`;
+        }
+      }
+    }
+    
+    return null;
   }
   function updateResultsUI(targetEl) {
     const gText = results.querySelector(
