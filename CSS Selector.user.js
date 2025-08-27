@@ -640,6 +640,24 @@
 
   const uiContains = (node) => !!(node && node.closest('[data-picker-ui="1"]'));
 
+  // ---------- config (named constants) ----------
+  /** Human-readable named constants replacing magic numbers */
+  const CONFIG = Object.freeze({
+    CACHE_CLEANUP_MS: 30_000,
+    MAX_SELECTOR_TEST_CACHE: 500,
+    MAX_MATCHES_ARRAY_CACHE: 50,
+    MAX_QUERY_MATCHES: 1200,
+    MAX_CHILDREN_CHECK: 30,
+    MAX_SIBLINGS_ANALYZE: 8,
+    CONTAINER_MAX_DEPTH: 3,
+    LABEL_RESTORE_MS: 900,
+    OVERLAY_HIDE_DELAY: 160,
+    OVERLAY_POINTERLEAVE_DELAY: 120,
+    SCROLL_SETTLE_MS: 140,
+    MIN_GENERIC_MATCHES: 2,
+    MAX_GENERIC_MATCHES: 200,
+  });
+
   // ---------- performance helpers ----------
   
   // Cache for expensive computations
@@ -654,12 +672,67 @@
     if (cacheCleanupTimer) return;
     cacheCleanupTimer = setTimeout(() => {
       // Clean selector test cache if it gets too large
-      if (selectorTestCache.size > 500) {
+      if (selectorTestCache.size > CONFIG.MAX_SELECTOR_TEST_CACHE) {
         selectorTestCache.clear();
       }
       cacheCleanupTimer = null;
-    }, 30000); // Clean every 30 seconds
+    }, CONFIG.CACHE_CLEANUP_MS);
   };
+
+  /** Convenience: flash a pill text with a temporary message then restore */
+  function flashPillText(labelEl, tempText, restoreText, timeout = CONFIG.LABEL_RESTORE_MS) {
+    if (!labelEl) return;
+    const prev = restoreText ?? labelEl.textContent ?? "";
+    labelEl.textContent = tempText;
+    setTimeout(() => {
+      labelEl.textContent = trim(prev, PILL_MAX_CHARS);
+    }, timeout);
+  }
+
+  /** Overlay helpers to avoid duplicating pin/show/hide logic */
+  let cssOverlayHideTimer = null;
+  function cancelCssOverlayHideTimer() {
+    if (cssOverlayHideTimer) {
+      clearTimeout(cssOverlayHideTimer);
+      cssOverlayHideTimer = null;
+    }
+  }
+  function scheduleCssOverlayHide(delay = CONFIG.OVERLAY_HIDE_DELAY) {
+    cancelCssOverlayHideTimer();
+    cssOverlayHideTimer = setTimeout(hideCssOverlay, delay);
+  }
+  function pinOverlay(kind) {
+    overlayPinned = true;
+    lastOverlayKind = kind;
+    cancelCssOverlayHideTimer();
+    clearAllCssButtonActive();
+    setCssButtonActive(kind, true);
+    showCssOverlayFor(kind);
+  }
+  function unpinOverlay() {
+    overlayPinned = false;
+    lastOverlayKind = null;
+    clearAllCssButtonActive();
+    hideCssOverlay();
+  }
+  function toggleOverlayPin(kind) {
+    if (!overlayPinned) {
+      pinOverlay(kind);
+    } else if (lastOverlayKind === kind) {
+      unpinOverlay();
+    } else {
+      pinOverlay(kind);
+    }
+  }
+
+  /** Utility to detect typing contexts */
+  function isTypingFocus() {
+    const ae = document.activeElement;
+    return (
+      ae &&
+      (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)
+    );
+  }
   
   // Optimized helper functions with caching
   const getSemanticClasses = (() => {
@@ -734,7 +807,7 @@
     try {
       const matches = document.querySelectorAll(selector);
       const count = matches.length;
-      const matchesArray = count <= 50 ? Array.from(matches) : null; // Only cache small arrays
+      const matchesArray = count <= CONFIG.MAX_MATCHES_ARRAY_CACHE ? Array.from(matches) : null; // Only cache small arrays
       
       const result = {
         valid: count >= minMatches && count <= maxMatches,
@@ -760,6 +833,7 @@
 
   // ---------- selector builders ----------
 
+  /** Build a generic selector that matches similar elements (not unique) */
   function buildGeneric(el) {
     if (!(el instanceof Element)) return "*";
     
@@ -772,8 +846,8 @@
     }
     
     try {
-      const MAX_MATCHES_TARGET = 200;
-      const MIN_MATCHES_TARGET = 2;
+      const MAX_MATCHES_TARGET = CONFIG.MAX_GENERIC_MATCHES;
+      const MIN_MATCHES_TARGET = CONFIG.MIN_GENERIC_MATCHES;
       
       // Get cached semantic signature
       let signature = semanticCache.get(el);
@@ -923,13 +997,13 @@
       let current = element.parentElement;
       const candidates = [];
       let depth = 0;
-      const MAX_DEPTH = 3; // Reduced from unlimited traversal
+      const MAX_DEPTH = CONFIG.CONTAINER_MAX_DEPTH;
       
       while (current && current !== document.documentElement && depth < MAX_DEPTH) {
         const sameTagSiblings = getSameTagSiblings(element);
         
         if (sameTagSiblings.length >= 2) {
-          const maxSiblingsToAnalyze = Math.min(sameTagSiblings.length, 8); // Reduced from 10
+          const maxSiblingsToAnalyze = Math.min(sameTagSiblings.length, CONFIG.MAX_SIBLINGS_ANALYZE);
           const signatures = [];
           
           // Optimized signature collection
@@ -1042,7 +1116,7 @@
     // Try element's own semantic classes (simplified)
     if (signature.classes.length > 0) {
       const classSelector = `${tag}.${CSS.escape(signature.classes[0])}`;
-      const result = testSelector(classSelector, element, 2, 200);
+      const result = testSelector(classSelector, element, CONFIG.MIN_GENERIC_MATCHES, CONFIG.MAX_GENERIC_MATCHES);
       if (result.valid) return classSelector;
     }
     
@@ -1050,7 +1124,7 @@
     if (signature.dataAttrs.length > 0) {
       const attr = signature.dataAttrs[0];
       const attrSelector = `${tag}[${CSS.escape(attr.name)}="${CSS.escape(attr.value)}"]`;
-      const result = testSelector(attrSelector, element, 2, 200);
+      const result = testSelector(attrSelector, element, CONFIG.MIN_GENERIC_MATCHES, CONFIG.MAX_GENERIC_MATCHES);
       if (result.valid) return attrSelector;
     }
     
@@ -1060,7 +1134,7 @@
       const parentSelector = getMinimalContainerSelector(parent);
       if (parentSelector) {
         const contextSelector = `${parentSelector} ${tag}.${CSS.escape(signature.classes[0])}`;
-        const result = testSelector(contextSelector, element, 2, 200);
+        const result = testSelector(contextSelector, element, CONFIG.MIN_GENERIC_MATCHES, CONFIG.MAX_GENERIC_MATCHES);
         if (result.valid) return contextSelector;
       }
     }
@@ -1109,6 +1183,7 @@
     return ''; // No good container selector found
   }
 
+  /** Build a specific (ideally unique) selector for the element */
   function buildSpecific(el) {
     if (!(el instanceof Element)) return "*";
     
@@ -1236,7 +1311,7 @@
     try {
       const matchQuery = document.querySelectorAll(sel);
       // Convert NodeList to Array only for processing
-      matches = matchQuery.length <= 1200 ? Array.from(matchQuery) : Array.from(matchQuery).slice(0, 1200);
+      matches = matchQuery.length <= CONFIG.MAX_QUERY_MATCHES ? Array.from(matchQuery) : Array.from(matchQuery).slice(0, CONFIG.MAX_QUERY_MATCHES);
     } catch (_) {
       // Invalid selector, show just the target element
       const r0 = getCachedBoundingRect(el);
@@ -1352,7 +1427,7 @@
     let broaderGeneric = makeSelectorBroader(selectorGeneric);
     
     if (broaderGeneric && broaderGeneric !== selectorGeneric) {
-      const result = testSelector(broaderGeneric, el, 2, 200);
+      const result = testSelector(broaderGeneric, el, CONFIG.MIN_GENERIC_MATCHES, CONFIG.MAX_GENERIC_MATCHES);
       if (result.valid) {
         selectorGeneric = broaderGeneric;
         return;
@@ -1377,7 +1452,7 @@
     if (parent) {
       const parentTag = parent.tagName.toLowerCase();
       const parentChildSelector = `${parentTag} ${tag}`;
-      const result = testSelector(parentChildSelector, el, 2, 200);
+      const result = testSelector(parentChildSelector, el, CONFIG.MIN_GENERIC_MATCHES, CONFIG.MAX_GENERIC_MATCHES);
       if (result.valid) {
         selectorGeneric = parentChildSelector;
         return;
@@ -1388,7 +1463,7 @@
     const broadTags = ['div', 'span', 'p', 'a', 'li', 'td', 'th', 'tr', 'img', 'input', 'button'];
     
     if (!broadTags.includes(tag)) {
-      const tagResult = testSelector(tag, null, 2, 200);
+      const tagResult = testSelector(tag, null, CONFIG.MIN_GENERIC_MATCHES, CONFIG.MAX_GENERIC_MATCHES);
       if (tagResult.valid) {
         selectorGeneric = tag;
       }
@@ -1736,10 +1811,7 @@
       const restore = kind === "generic" ? (selectorGeneric || "*") : (selectorSpecific || "*");
       if (labelText) {
         const r = restore;
-        labelText.textContent = msg;
-        setTimeout(() => {
-          labelText.textContent = trim(r, PILL_MAX_CHARS);
-        }, 900);
+        flashPillText(labelText, msg, r);
       }
     }
   }
@@ -1752,10 +1824,7 @@
     const full = kind === "generic" ? (selectorGeneric || "*") : (selectorSpecific || "*");
     await copyText(full);
     const restore = full;
-    labelText.textContent = "Copied";
-    setTimeout(() => {
-      labelText.textContent = trim(restore, PILL_MAX_CHARS);
-    }, 900);
+    flashPillText(labelText, "Copied", restore);
   };
   results.addEventListener("click", (e) => {
     if (e.target.closest(".pill-lock") || e.target.closest(".action-btn"))
@@ -1797,10 +1866,7 @@
       const labelText = row.querySelector(".pill-text");
       if (labelText) {
         const r = sel;
-        labelText.textContent = "Hidden";
-        setTimeout(() => {
-          labelText.textContent = trim(r, PILL_MAX_CHARS);
-        }, 900);
+        flashPillText(labelText, "Hidden", r);
       }
       return;
     }
@@ -2005,7 +2071,7 @@
     }
   }
 
-  let cssOverlayHideTimer = null;
+  // Moved: cssOverlayHideTimer is now declared in overlay helper section
   function positionCssOverlayNear(rect) {
     cssOverlay.style.display = "block";
     cssOverlay.style.visibility = "hidden";
@@ -2028,10 +2094,7 @@
   function showCssOverlayFor(kind) {
     if (!locked || !lockedTarget) return;
     // Cancel any pending hide
-    if (cssOverlayHideTimer) {
-      clearTimeout(cssOverlayHideTimer);
-      cssOverlayHideTimer = null;
-    }
+    cancelCssOverlayHideTimer();
     const sel = kind === "generic" ? (selectorGeneric || "*") : (selectorSpecific || "*");
     const cssCode = buildComputedCSSText(sel, lockedTarget);
     const codeEl = cssOverlay.querySelector(".css-ov-code");
@@ -2077,19 +2140,16 @@
       btn.textContent = "Copied";
       setTimeout(() => {
         btn.textContent = prev;
-      }, 900);
+      }, CONFIG.LABEL_RESTORE_MS);
     });
   });
   cssOverlay.addEventListener("pointerleave", () => {
     // If pinned, keep it open
     if (overlayPinned) return;
-    cssOverlayHideTimer = setTimeout(hideCssOverlay, 120);
+    scheduleCssOverlayHide(CONFIG.OVERLAY_POINTERLEAVE_DELAY);
   });
   cssOverlay.addEventListener("pointerenter", () => {
-    if (cssOverlayHideTimer) {
-      clearTimeout(cssOverlayHideTimer);
-      cssOverlayHideTimer = null;
-    }
+    cancelCssOverlayHideTimer();
   });
 
   // CSS button interactions (hover/tap) - optimized event handling
@@ -2101,10 +2161,7 @@
     const kind = row?.getAttribute("data-kind");
     if (!kind) return;
     
-    if (cssOverlayHideTimer) {
-      clearTimeout(cssOverlayHideTimer);
-      cssOverlayHideTimer = null;
-    }
+    cancelCssOverlayHideTimer();
     showCssOverlayFor(kind);
   });
   
@@ -2112,8 +2169,7 @@
     const cssBtn = e.target.closest('.action-btn[data-action="css"]');
     if (!cssBtn || overlayPinned) return;
     
-    if (cssOverlayHideTimer) clearTimeout(cssOverlayHideTimer);
-    cssOverlayHideTimer = setTimeout(hideCssOverlay, 160);
+    scheduleCssOverlayHide(CONFIG.OVERLAY_HIDE_DELAY);
   });
   results.addEventListener("click", (e) => {
     const cssBtn = e.target.closest('.action-btn[data-action="css"]');
@@ -2126,34 +2182,7 @@
     if (!locked) return;
 
     // Toggle pinning. Clicking the other button swaps content while staying pinned.
-    if (!overlayPinned) {
-      overlayPinned = true;
-      lastOverlayKind = kind;
-      if (cssOverlayHideTimer) {
-        clearTimeout(cssOverlayHideTimer);
-        cssOverlayHideTimer = null;
-      }
-      clearAllCssButtonActive();
-      setCssButtonActive(kind, true);
-      showCssOverlayFor(kind);
-    } else {
-      if (lastOverlayKind === kind) {
-        overlayPinned = false;
-        lastOverlayKind = null;
-        clearAllCssButtonActive();
-        // Allow hiding now that it's unpinned
-        hideCssOverlay();
-      } else {
-        lastOverlayKind = kind;
-        if (cssOverlayHideTimer) {
-          clearTimeout(cssOverlayHideTimer);
-          cssOverlayHideTimer = null;
-        }
-        clearAllCssButtonActive();
-        setCssButtonActive(kind, true);
-        showCssOverlayFor(kind);
-      }
-    }
+    toggleOverlayPin(kind);
   });
 
   // Ensure first tap opens overlay on touch/pen (without requiring a second tap)
@@ -2167,33 +2196,7 @@
     const kind = row?.getAttribute("data-kind");
     if (!kind || !locked) return;
 
-    if (!overlayPinned) {
-      overlayPinned = true;
-      lastOverlayKind = kind;
-      if (cssOverlayHideTimer) {
-        clearTimeout(cssOverlayHideTimer);
-        cssOverlayHideTimer = null;
-      }
-      clearAllCssButtonActive();
-      setCssButtonActive(kind, true);
-      showCssOverlayFor(kind);
-    } else {
-      if (lastOverlayKind === kind) {
-        overlayPinned = false;
-        lastOverlayKind = null;
-        clearAllCssButtonActive();
-        hideCssOverlay();
-      } else {
-        lastOverlayKind = kind;
-        if (cssOverlayHideTimer) {
-          clearTimeout(cssOverlayHideTimer);
-          cssOverlayHideTimer = null;
-        }
-        clearAllCssButtonActive();
-        setCssButtonActive(kind, true);
-        showCssOverlayFor(kind);
-      }
-    }
+    toggleOverlayPin(kind);
   });
 
   // ---------- snapping logic (optimized) ----------
@@ -2234,7 +2237,7 @@
     x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
     
   function nearestBoundaryChild(el, x, y, parentRect) {
-    const maxChildren = Math.min(el.children.length, 30); // Reduced from 50
+    const maxChildren = Math.min(el.children.length, CONFIG.MAX_CHILDREN_CHECK);
     let best = null,
       bestEdge = Infinity;
       
@@ -2376,7 +2379,7 @@
         boundingRectCache.clear && boundingRectCache.clear();
         updateVisuals();
       }
-    }, 140);
+    }, CONFIG.SCROLL_SETTLE_MS);
   };
   
   // Use optimized scroll listener
@@ -2443,13 +2446,7 @@
   document.addEventListener(
     "keydown",
     (e) => {
-      const ae = document.activeElement;
-      const typing =
-        ae &&
-        (ae.tagName === "INPUT" ||
-          ae.tagName === "TEXTAREA" ||
-          ae.isContentEditable);
-      if (typing) return;
+      if (isTypingFocus()) return;
       if (e.metaKey && e.shiftKey && (e.key === "C" || e.key === "c")) {
         e.preventDefault();
         e.stopPropagation();
