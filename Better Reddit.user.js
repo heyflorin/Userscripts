@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Custom Reddit
+// @name         Better Reddit
 // @version      1.0
 // @description  Custom Reddit tweaks for the default UI
 // @author       Florin Catalin Mehedinti
