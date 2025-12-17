@@ -18,7 +18,7 @@
 
   // If the app *keeps* forcing zoom via viewport changes, enabling this can help.
   // Downside: it can restrict pinch zoom.
-  const LOCK_MAX_SCALE = false; // set true if needed
+  const LOCK_MAX_SCALE = true; // set true if needed
 
   // If the app is using CSS scaling (transform: scale / zoom), try to undo it.
   const STRIP_CSS_SCALE_HACKS = true;
