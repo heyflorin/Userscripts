@@ -35,7 +35,7 @@
   // 3) Your CSS (inline here; or assemble dynamically)
   const CSS = `
 
-    body {
+    html, body {
       overscroll-behavior: none !important;
     }
 
