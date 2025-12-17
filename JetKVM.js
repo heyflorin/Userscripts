@@ -51,6 +51,18 @@
       position: relative !important;
     }
 
+    video {
+      margin-top: 5px !important;
+      border-radius: 23px  !important;
+      max-height: 100%  !important;
+      max-width: 100%  !important;
+      object-fit: contain  !important;
+    }
+
+    .grid {
+      min-height: calc(100vh - 90px)  !important;
+    }
+
   `;
 
   // 4) Run early AND also after DOM is ready (covers both timings)
@@ -82,19 +94,19 @@
 
   check();
 
-const obs = new MutationObserver(check);
-obs.observe(document.head, { childList: true });
+  const obs = new MutationObserver(check);
+  obs.observe(document.head, { childList: true });
 
-function check() {
+  function check() {
     (document.querySelectorAll('meta[name="viewport"]') ||
-    [document.head.appendChild(Object.assign(
+      [document.head.appendChild(Object.assign(
         document.createElement("meta"),
         { name: "viewport" }
-    ))]).forEach(vp => {
+      ))]).forEach(vp => {
         if (!vp.content.includes('user-scalable=no')) vp.content = vp.content ?
-            `${vp.content}, user-scalable=no` :
-            'user-scalable=no';
-    });
-}
+          `${vp.content}, user-scalable=no` :
+          'user-scalable=no';
+      });
+  }
 
 })();
