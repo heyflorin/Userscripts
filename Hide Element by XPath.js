@@ -36,6 +36,7 @@
   // 1. INITIAL RUN: Attempt to hide immediately in case it's already there
   hideTarget("//html/body/div/div/div[2]/div");
   hideTarget("//html/body/div/div/div[2]/div[2]/div/div");
+  hideTarget("//html/body/div/div/div[2]/div[2]/div/div[3]/div");
 
   // 2. OBSERVER: Watch for changes in the page (dynamic loading)
   const observer = new MutationObserver((mutations) => {
@@ -51,6 +52,7 @@
     if (shouldCheck) {
     hideTarget("//html/body/div/div/div[2]/div");
     hideTarget("//html/body/div/div/div[2]/div[2]/div/div");
+    hideTarget("//html/body/div/div/div[2]/div[2]/div/div[3]/div");
     }
   });
 
