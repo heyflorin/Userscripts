@@ -12,13 +12,10 @@
 (function () {
   'use strict';
 
-  // CONFIGURATION: Your XPath
-  const targetXPath = "//html/body/div/div/div[2]/div";
-
   /**
    * Attempts to find the element via XPath and hide it.
    */
-  function hideTarget() {
+  function hideTarget(targetXPath) {
     const result = document.evaluate(
       targetXPath,
       document,
@@ -37,22 +34,23 @@
   }
 
   // 1. INITIAL RUN: Attempt to hide immediately in case it's already there
-  hideTarget();
+  hideTarget("//html/body/div/div/div[2]/div");
+  hideTarget("//html/body/div/div/div[2]/div[2]/div/div");
 
   // 2. OBSERVER: Watch for changes in the page (dynamic loading)
-  const observer = new MutationObserver((mutations) => {
+  // const observer = new MutationObserver((mutations) => {
     // For performance, we only re-check if nodes were actually added
-    let shouldCheck = false;
-    for (const mutation of mutations) {
-      if (mutation.addedNodes.length > 0) {
-        shouldCheck = true;
-        break;
-      }
-    }
+    // let shouldCheck = false;
+    // for (const mutation of mutations) {
+    //   if (mutation.addedNodes.length > 0) {
+    //     shouldCheck = true;
+    //     break;
+    //   }
+    // }
 
-    if (shouldCheck) {
-      hideTarget();
-    }
+    // if (shouldCheck) {
+    //   hideTarget();
+    // }
   });
 
   // Start observing the document body for added nodes
