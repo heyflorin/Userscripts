@@ -1,65 +1,78 @@
 // ==UserScript==
-// @name         Hide Element by XPath
+// @name         Hide Elements by XPath (JetKVM)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Hides a specific element identified by XPath, even if it loads dynamically.
-// @author       You
+// @version      1.1
+// @description  Hides elements identified by XPath, including dynamically loaded nodes.
 // @match        https://app.jetkvm.com/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
 
-(function () {
-  'use strict';
+(() => {
+  "use strict";
 
-  /**
-   * Attempts to find the element via XPath and hide it.
-   */
-  function hideTarget(targetXPath) {
-    const result = document.evaluate(
-      targetXPath,
-      document,
-      null,
-      XPathResult.FIRST_ORDERED_NODE_TYPE,
-      null
-    );
+  // Add/remove XPaths here.
+  const XPATHS = [
+    "//html/body/div/div/div[2]/div",
+    "//html/body/div/div/div[2]/div[2]/div/div",
+    "//html/body/div/div/div[2]/div[2]/div/div[3]/div",
+  ];
 
-    const element = result.singleNodeValue;
+  const log = (...args) => console.log("[HideXPath]", ...args);
 
-    // Only apply style if element exists and is not already hidden
-    if (element && element.style.display !== 'none') {
-      element.style.display = 'none';
-      console.log('Userscript: Element hidden successfully.');
+  function firstByXPath(xpath, root = document) {
+    try {
+      return document.evaluate(
+        xpath,
+        root,
+        null,
+        XPathResult.FIRST_ORDERED_NODE_TYPE,
+        null
+      ).singleNodeValue;
+    } catch (e) {
+      log("Bad XPath:", xpath, e);
+      return null;
     }
   }
 
-  // 1. INITIAL RUN: Attempt to hide immediately in case it's already there
-  hideTarget("//html/body/div/div/div[2]/div");
-  hideTarget("//html/body/div/div/div[2]/div[2]/div/div");
-  hideTarget("//html/body/div/div/div[2]/div[2]/div/div[3]/div");
+  function hideByXPaths(xpaths) {
+    let hiddenCount = 0;
 
-  // 2. OBSERVER: Watch for changes in the page (dynamic loading)
+    for (const xpath of xpaths) {
+      const el = firstByXPath(xpath);
+      if (!el) continue;
+
+      // Avoid redoing work if we already hid it.
+      if (el.dataset.usHiddenByXpath === "1") continue;
+
+      el.style.setProperty("display", "none", "important");
+      el.dataset.usHiddenByXpath = "1";
+      hiddenCount++;
+    }
+
+    if (hiddenCount) log(`Hidden ${hiddenCount} element(s).`);
+  }
+
+  // Initial pass
+  hideByXPaths(XPATHS);
+
+  // Watch for dynamically added content; throttle to one pass per animation frame.
+  let scheduled = false;
   const observer = new MutationObserver((mutations) => {
-    // For performance, we only re-check if nodes were actually added
-    let shouldCheck = false;
-    for (const mutation of mutations) {
-      if (mutation.addedNodes.length > 0) {
-        shouldCheck = true;
+    if (scheduled) return;
+
+    // Only react if something was added (cheap filter).
+    for (const m of mutations) {
+      if (m.addedNodes && m.addedNodes.length) {
+        scheduled = true;
+        requestAnimationFrame(() => {
+          scheduled = false;
+          hideByXPaths(XPATHS);
+        });
         break;
       }
     }
-
-    if (shouldCheck) {
-    hideTarget("//html/body/div/div/div[2]/div");
-    hideTarget("//html/body/div/div/div[2]/div[2]/div/div");
-    hideTarget("//html/body/div/div/div[2]/div[2]/div/div[3]/div");
-    }
   });
 
-  // Start observing the document body for added nodes
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true
-  });
-
+  observer.observe(document.documentElement, { childList: true, subtree: true });
 })();
