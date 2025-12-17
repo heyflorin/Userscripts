@@ -52,7 +52,7 @@
     }
 
     video {
-      margin-top: 5px !important;
+      margin-top: 4px !important;
       border-radius: 23px  !important;
       max-height: 100%  !important;
       max-width: 100%  !important;
