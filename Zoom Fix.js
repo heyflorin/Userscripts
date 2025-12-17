@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         iPad Safari Zoom/Viewport Lock
+// @name         iPad Safari Zoom/Viewport Lock (JetKVM)
 // @version      1.0.0
 // @description  Prevent web apps from changing viewport scale / zoom behavior on orientation/viewport changes (iPad Safari)
-// @match        https://app.jetkvm.com/*
+// @match        https://app.jetkvm.com/v/0.5.0/devices/*
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
