@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         JetKVM Mods
-// @version      1.0
+// @version      1.1
 // @description  Custom tweaks JetKVM web interface
 // @author       Florin Catalin Mehedinti
 // @run-at       document-start
@@ -8,36 +8,26 @@
 // @grant        GM.addStyle
 // ==/UserScript==
 
-(function () {
-  // 1) Hide ASAP to avoid flash
-  const HIDE_ID = "us-hide-until-styled";
-  const hide = document.createElement("style");
-  hide.id = HIDE_ID;
-  hide.textContent = "html{visibility:hidden !important;}";
-  // Use <html> if <head> not ready yet
-  (document.head || document.documentElement).appendChild(hide);
+(() => {
+  "use strict";
 
-  // 2) GM_addStyle wrapper with fallback
+  // Hide ASAP to avoid a flash of unstyled layout
+  const HIDE_ID = "us-hide-until-styled";
+  const hideStyle = document.createElement("style");
+  hideStyle.id = HIDE_ID;
+  hideStyle.textContent = "html{visibility:hidden !important;}";
+  (document.head || document.documentElement).appendChild(hideStyle);
+
+  // Minimal style injection (GM.addStyle if available; otherwise <style>)
   const addCSS = (css) => {
-    if (typeof GM_addStyle === "function") {
-      GM_addStyle(css);
-      return;
-    }
-    if (typeof GM !== "undefined" && typeof GM.addStyle === "function") {
-      GM.addStyle(css);
-      return;
-    }
+    if (typeof GM?.addStyle === "function") return GM.addStyle(css);
     const s = document.createElement("style");
     s.textContent = css;
-    document.head.appendChild(s);
+    (document.head || document.documentElement).appendChild(s);
   };
 
-  // 3) Your CSS (inline here; or assemble dynamically)
-  const CSS = `
-
-    html, body {
-      overscroll-behavior: none !important;
-    }
+  addCSS(`
+    html, body { overscroll-behavior: none !important; }
 
     html {
       overflow: hidden !important;
@@ -53,60 +43,47 @@
 
     video {
       margin-top: 2px !important;
-      border-radius: 23px  !important;
-      max-height: 100%  !important;
-      max-width: 100%  !important;
-      object-fit: contain  !important;
+      border-radius: 23px !important;
+      max-height: 100% !important;
+      max-width: 100% !important;
+      object-fit: contain !important;
     }
 
-    .grid {
-      min-height: calc(100vh - 90px)  !important;
+    .grid { min-height: calc(100vh - 90px) !important; }
+  `);
+
+  // Ensure viewport disallows pinch zoom (if JetKVM adds/changes it later)
+  function ensureViewportLocked() {
+    const head = document.head || document.documentElement;
+    let vp = head.querySelector('meta[name="viewport"]');
+    if (!vp) {
+      vp = document.createElement("meta");
+      vp.name = "viewport";
+      head.appendChild(vp);
     }
+    const content = vp.getAttribute("content") || "";
+    if (!/user-scalable\s*=\s*no/i.test(content)) {
+      vp.setAttribute("content", content ? `${content}, user-scalable=no` : "user-scalable=no");
+    }
+  }
 
-  `;
+  ensureViewportLocked();
+  new MutationObserver(ensureViewportLocked).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
 
-  // 4) Run early AND also after DOM is ready (covers both timings)
-  // Early pass (document-start)
-  addCSS(CSS);
-
+  // Reveal once styles have had a chance to apply
   const reveal = () => {
-    // Give the browser a tick to apply styles before reveal
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const el = document.getElementById(HIDE_ID);
-        if (el) el.remove();
-      });
-    });
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.getElementById(HIDE_ID)?.remove();
+    }));
   };
 
-  // If DOM is already interactive/complete, reveal now; else wait
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => {
-      // Optional: add more late CSS here if needed
-      // addCSS(moreCSS);
-      reveal();
-    });
-    // Safety: if something delays DOMContentLoaded, still reveal at window load
+    document.addEventListener("DOMContentLoaded", reveal, { once: true });
     window.addEventListener("load", reveal, { once: true });
   } else {
     reveal();
   }
-
-  check();
-
-  const obs = new MutationObserver(check);
-  obs.observe(document.head, { childList: true });
-
-  function check() {
-    (document.querySelectorAll('meta[name="viewport"]') ||
-      [document.head.appendChild(Object.assign(
-        document.createElement("meta"),
-        { name: "viewport" }
-      ))]).forEach(vp => {
-        if (!vp.content.includes('user-scalable=no')) vp.content = vp.content ?
-          `${vp.content}, user-scalable=no` :
-          'user-scalable=no';
-      });
-  }
-
 })();
