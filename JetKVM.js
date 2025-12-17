@@ -79,4 +79,22 @@
   } else {
     reveal();
   }
+
+  check();
+
+const obs = new MutationObserver(check);
+obs.observe(document.head, { childList: true });
+
+function check() {
+    (document.querySelectorAll('meta[name="viewport"]') ||
+    [document.head.appendChild(Object.assign(
+        document.createElement("meta"),
+        { name: "viewport" }
+    ))]).forEach(vp => {
+        if (!vp.content.includes('user-scalable=no')) vp.content = vp.content ?
+            `${vp.content}, user-scalable=no` :
+            'user-scalable=no';
+    });
+}
+
 })();
