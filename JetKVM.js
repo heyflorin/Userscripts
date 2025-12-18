@@ -45,7 +45,6 @@
       margin-top: 2px !important;
       border-radius: 23px !important;
       max-height: 100% !important;
-      max-width: 100% !important;
       object-fit: contain !important;
     }
 
