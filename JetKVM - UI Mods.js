@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         JetKVM Mods
+// @name         JetKVM - CSS Mods
 // @version      1.1
 // @description  Custom tweaks JetKVM web interface
 // @author       Florin Catalin Mehedinti

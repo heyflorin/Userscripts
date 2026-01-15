@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Hide Elements by XPath (JetKVM)
+// @name         JetKVM UI Modifications - Hide various elements by XPath
 // @namespace    http://tampermonkey.net/
 // @version      1.1
-// @description  Hides elements identified by XPath, including dynamically loaded nodes.
+// @description  Hides elements identified by XPath, including dynamically loaded nodes and other customizations.
 // @match        https://app.jetkvm.com/v/*/devices/*
 // @grant        none
 // @run-at       document-idle
