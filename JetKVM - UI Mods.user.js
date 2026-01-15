@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         JetKVM - CSS Mods
-// @version      1.1
+// @version      1.2
 // @downloadURL  https://raw.githubusercontent.com/heyflorin/Userscripts/refs/heads/main/JetKVM%20-%20UI%20Mods.user.js
 // @description  Custom tweaks JetKVM web interface
 // @author       Florin Catalin Mehedinti

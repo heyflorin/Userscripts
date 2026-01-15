@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         JetKVM - Fullscreen + CSS + Viewport Lock
-// @version      2.0
+// @version      1.2
 // @downloadURL  https://raw.githubusercontent.com/heyflorin/Userscripts/refs/heads/main/JetKVM%20-%20Full%20Screen.user.js
 // @description  Adds CMD+SHIFT+F fake-fullscreen (no Safari fullscreen X), applies UI CSS tweaks, and locks viewport scaling.
 // @author       Florin Catalin Mehedinti
