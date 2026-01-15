@@ -5,7 +5,7 @@
 // @description  Adds CMD+SHIFT+F fake-fullscreen (no Safari fullscreen X), applies UI CSS tweaks, and locks viewport scaling.
 // @author       Florin Catalin Mehedinti
 // @run-at       document-start
-// @match        https://app.jetkvm.com/v/*/devices/*
+// @match        https://app.jetkvm.com/v/*
 // @grant        GM.addStyle
 // ==/UserScript==
 

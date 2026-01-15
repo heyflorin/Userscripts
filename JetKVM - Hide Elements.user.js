@@ -4,7 +4,7 @@
 // @version      1.1
 // @downloadURL  https://raw.githubusercontent.com/heyflorin/Userscripts/refs/heads/main/JetKVM%20-%20Hide%20Elements.user.js
 // @description  Hides elements identified by XPath, including dynamically loaded nodes and other customizations.
-// @match        https://app.jetkvm.com/v/*/devices/*
+// @match        https://app.jetkvm.com/v/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
