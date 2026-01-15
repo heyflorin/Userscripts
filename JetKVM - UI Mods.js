@@ -43,12 +43,12 @@
 
     video {
       margin-top: 2px !important;
-      border-radius: 23px !important;
+      border-radius: 20px !important;
       max-height: 100% !important;
       object-fit: contain !important;
     }
 
-    .grid { min-height: calc(100vh - 90px) !important; }
+	.grid { min-height: calc(100vh - 90px) !important; }
   `);
 
   // Ensure viewport disallows pinch zoom (if JetKVM adds/changes it later)
