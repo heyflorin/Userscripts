@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.1
 // @description  Hides elements identified by XPath, including dynamically loaded nodes.
-// @match        https://app.jetkvm.com/v/0.5.0/devices/*
+// @match        https://app.jetkvm.com/v/*/devices/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==

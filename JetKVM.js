@@ -4,7 +4,7 @@
 // @description  Custom tweaks JetKVM web interface
 // @author       Florin Catalin Mehedinti
 // @run-at       document-start
-// @match        https://app.jetkvm.com/v/0.5.0/devices/*
+// @match        https://app.jetkvm.com/v/*/devices/*
 // @grant        GM.addStyle
 // ==/UserScript==
 
