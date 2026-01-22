@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         JetKVM UI Modifications - Hide various elements by XPath
+// @name         JetKVM UI - Hide Elements
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.4
 // @downloadURL  https://raw.githubusercontent.com/heyflorin/Userscripts/refs/heads/main/JetKVM%20-%20Hide%20Elements.user.js
 // @description  Hides elements identified by XPath, including dynamically loaded nodes and other customizations.
 // @match        https://app.jetkvm.com/v/*
@@ -17,6 +17,8 @@
     "//html/body/div/div/div[2]/div",
     "//html/body/div/div/div[2]/div[2]/div/div",
     "//html/body/div/div/div[2]/div[2]/div/div[3]/div",
+    "//html/body/div/div/div[2]/div[2]/div/div[2]/div/div",
+    "//html/body/div/div/div[2]/div[2]/div[3]"
   ];
 
   const log = (...args) => console.log("[HideXPath]", ...args);
