@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         JetKVM - Keyboard
+// @name         JetKVM - Virtual Keys
 // @namespace    https://example.com/
-// @version      2.0.0
-// @description  Adds a draggable keyboard button anchored over the bottom of the largest <video>. Uses a body-level overlay so it won't get covered by app layers.
+// @version      2.1.0
+// @description  Draggable ⌨️ button over the largest <video>. Reveals a persistent "Tap to type" input that iPadOS will open keyboard for. Uses capture-phase blockers so app doesn't steal taps.
 // @author       Florin
 // @match        https://app.jetkvm.com/v/*
 // @run-at       document-idle
@@ -13,54 +13,53 @@
   "use strict";
 
   const VIDEO_SELECTOR = "video";
-  const STORAGE_KEY_LEFT_RATIO = "us_kb_btn_left_ratio_v1"; // store 0..1 for responsive layouts
+  const STORAGE_KEY_LEFT_RATIO = "us_kb_btn_left_ratio_v2";
 
   const css = `
-    .us-kb-overlay {
-      position: fixed;
-      left: 0; top: 0;
-      width: 10px; height: 10px;
-      z-index: 2147483647;
-      pointer-events: none; /* children opt-in */
+    .us-kb-overlay{
+      position:fixed; left:0; top:0; width:10px; height:10px;
+      z-index:2147483647; pointer-events:none;
     }
-    .us-kb-btn {
-      position: absolute;
-      bottom: 10px;
-      left: 12px;
-      width: 44px; height: 44px;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.25);
-      background: rgba(0,0,0,0.55);
-      color: #fff;
-      font-size: 20px;
-      line-height: 44px;
-      text-align: center;
-      user-select: none; -webkit-user-select: none;
-      touch-action: none;
-      pointer-events: auto;
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
-      box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+    .us-kb-btn{
+      position:absolute; bottom:10px; left:12px;
+      width:44px; height:44px; border-radius:999px;
+      border:1px solid rgba(255,255,255,0.25);
+      background:rgba(0,0,0,0.55); color:#fff;
+      font-size:20px; line-height:44px; text-align:center;
+      user-select:none; -webkit-user-select:none;
+      touch-action:none; pointer-events:auto;
+      backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+      box-shadow:0 6px 18px rgba(0,0,0,0.25);
     }
-    .us-kb-btn.us-dragging { opacity: 0.9; }
+    .us-kb-btn.us-dragging{ opacity:0.9; }
 
-    .us-kb-input {
-      position: absolute;
-      bottom: 10px;
-      left: 10px;
-      right: 10px;
-      height: 40px;
-      padding: 0 12px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.25);
-      background: rgba(0,0,0,0.55);
-      color: #fff;
-      font: 16px/40px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
-      outline: none;
-      -webkit-appearance: none;
-      pointer-events: auto;
+    .us-kb-bar{
+      position:absolute; bottom:10px; left:10px; right:10px;
+      display:flex; gap:8px; align-items:center;
+      pointer-events:auto;
     }
-    .us-kb-input::placeholder { color: rgba(255,255,255,0.6); }
+    .us-kb-input{
+      flex:1;
+      height:40px; padding:0 12px;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,0.25);
+      background:rgba(0,0,0,0.55);
+      color:#fff;
+      font:16px/40px -apple-system, BlinkMacSystemFont, "SF Pro Text","Helvetica Neue", Arial, sans-serif;
+      outline:none; -webkit-appearance:none;
+    }
+    .us-kb-input::placeholder{ color:rgba(255,255,255,0.6); }
+
+    .us-kb-close{
+      width:44px; height:40px;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,0.25);
+      background:rgba(0,0,0,0.55); color:#fff;
+      font:16px/40px -apple-system, BlinkMacSystemFont, "SF Pro Text","Helvetica Neue", Arial, sans-serif;
+      text-align:center;
+      user-select:none; -webkit-user-select:none;
+      touch-action:manipulation;
+    }
   `;
 
   if (typeof GM_addStyle === "function") GM_addStyle(css);
@@ -82,15 +81,11 @@
 
   function findBestVideo() {
     const vids = Array.from(document.querySelectorAll(VIDEO_SELECTOR)).filter(isVisible);
-    let best = null;
-    let bestArea = 0;
+    let best = null, bestArea = 0;
     for (const v of vids) {
       const r = v.getBoundingClientRect();
       const area = r.width * r.height;
-      if (area > bestArea) {
-        bestArea = area;
-        best = v;
-      }
+      if (area > bestArea) { bestArea = area; best = v; }
     }
     return best;
   }
@@ -109,6 +104,7 @@
     });
 
     inputEl.addEventListener("keydown", (e) => {
+      // prevent scrolling / browser behavior while typing
       e.preventDefault();
       window.dispatchEvent(new CustomEvent("us-remote-keydown", {
         detail: {
@@ -119,7 +115,7 @@
     });
   }
 
-  // Create a single overlay anchored to whichever video is "best" right now.
+  // --- Create overlay + button once ---
   const overlay = document.createElement("div");
   overlay.className = "us-kb-overlay";
   document.body.appendChild(overlay);
@@ -129,97 +125,100 @@
   btn.textContent = "⌨️";
   btn.title = "Keyboard";
   btn.setAttribute("role", "button");
-  btn.setAttribute("aria-label", "Keyboard");
   overlay.appendChild(btn);
 
-  let input = null;
-  function showInput() {
-    if (!input) {
-      input = document.createElement("input");
-      input.className = "us-kb-input";
-      input.type = "text";
-      input.placeholder = "Tap here to type…";
-      input.autocapitalize = "off";
-      input.autocomplete = "off";
-      input.autocorrect = "off";
-      input.spellcheck = false;
+  // Persistent bar (input + close) but toggled
+  const bar = document.createElement("div");
+  bar.className = "us-kb-bar";
+  bar.style.display = "none";
 
-      dispatchRemoteEvents(input);
+  const input = document.createElement("input");
+  input.className = "us-kb-input";
+  input.type = "text";
+  input.placeholder = "Tap here to type…";
+  input.autocapitalize = "off";
+  input.autocomplete = "off";
+  input.autocorrect = "off";
+  input.spellcheck = false;
 
-      input.addEventListener("blur", () => {
-        setTimeout(() => {
-          if (input && document.activeElement !== input) {
-            input.remove();
-            input = null;
-          }
-        }, 150);
-      });
+  const close = document.createElement("div");
+  close.className = "us-kb-close";
+  close.textContent = "✕";
+  close.setAttribute("role", "button");
 
-      overlay.appendChild(input);
+  bar.appendChild(input);
+  bar.appendChild(close);
+  overlay.appendChild(bar);
+
+  dispatchRemoteEvents(input);
+
+  function showBar() { bar.style.display = ""; }
+  function hideBar() { bar.style.display = "none"; input.blur(); }
+
+  // --- CAPTURE-PHASE BLOCKERS ---
+  // Many remote desktop apps listen on document/window (capture) and steal the event.
+  // We intercept taps on our controls *before* the app sees them.
+  function stopForOurUI(e) {
+    const t = e.target;
+    if (t === btn || t === input || t === close || (t instanceof Node && bar.contains(t))) {
+      e.stopImmediatePropagation();
+      // Don’t preventDefault on the input tap: iPad needs the native tap to focus + open keyboard.
+      if (t !== input) e.preventDefault();
     }
-
-    // Try focus; even if focus doesn't pop keyboard, the user tap on input will.
-    input.focus({ preventScroll: true });
-    try { input.setSelectionRange(0, 0); } catch (_) { }
   }
+  ["pointerdown", "pointerup", "touchstart", "touchend", "mousedown", "mouseup", "click"].forEach(type => {
+    document.addEventListener(type, stopForOurUI, true); // capture = true
+  });
 
-  // Drag the button horizontally within overlay width
-  let startX = 0, startLeft = 12, moved = false, pid = null;
+  // --- Button tap toggles the bar (no auto-focus) ---
+  let btnStartX = 0, btnStartLeft = 12, moved = false, pid = null;
 
   btn.addEventListener("pointerdown", (e) => {
     pid = e.pointerId;
     btn.setPointerCapture(pid);
-    startX = e.clientX;
-    startLeft = parseFloat(getComputedStyle(btn).left) || 12;
+    btnStartX = e.clientX;
+    btnStartLeft = parseFloat(getComputedStyle(btn).left) || 12;
     moved = false;
     btn.classList.add("us-dragging");
-    e.preventDefault();
-    e.stopPropagation();
   });
 
   btn.addEventListener("pointermove", (e) => {
     if (pid == null || e.pointerId !== pid) return;
 
-    const dx = e.clientX - startX;
+    const dx = e.clientX - btnStartX;
     const ow = overlay.getBoundingClientRect().width;
     const bw = btn.getBoundingClientRect().width;
     const maxLeft = Math.max(8, ow - bw - 8);
-
-    const newLeft = clamp(startLeft + dx, 8, maxLeft);
+    const newLeft = clamp(btnStartLeft + dx, 8, maxLeft);
     btn.style.left = `${newLeft}px`;
 
-    // store as ratio so it survives resizes
-    const ratio = maxLeft > 0 ? (newLeft - 8) / (maxLeft - 8) : 0;
+    const ratio = maxLeft > 8 ? (newLeft - 8) / (maxLeft - 8) : 0;
     localStorage.setItem(STORAGE_KEY_LEFT_RATIO, String(ratio));
 
     if (Math.abs(dx) > 6) moved = true;
   });
 
-  btn.addEventListener("pointerup", (e) => {
+  btn.addEventListener("pointerup", () => {
     if (pid != null) {
       try { btn.releasePointerCapture(pid); } catch (_) { }
     }
     btn.classList.remove("us-dragging");
 
-    if (!moved) showInput();
+    if (!moved) {
+      // Toggle bar; user must tap input to open keyboard (reliable on iPadOS)
+      bar.style.display === "none" ? showBar() : hideBar();
+    }
 
     pid = null;
     moved = false;
-
-    e.preventDefault();
-    e.stopPropagation();
   });
 
-  btn.addEventListener("pointercancel", () => {
-    pid = null;
-    moved = false;
-    btn.classList.remove("us-dragging");
-  });
+  close.addEventListener("click", hideBar);
 
-  // Position overlay to match the current best video’s rect
+  // --- Anchor overlay to video ---
   let currentVideo = null;
 
-  function applySavedButtonPos() {
+  function applySavedBtnPos() {
     const ratioRaw = localStorage.getItem(STORAGE_KEY_LEFT_RATIO);
     const ratio = ratioRaw != null ? Number(ratioRaw) : null;
     if (!Number.isFinite(ratio)) return;
@@ -231,54 +230,30 @@
     btn.style.left = `${left}px`;
   }
 
-  function anchorToVideo(v) {
-    currentVideo = v;
-    // update immediately
-    updateOverlay();
-    // apply saved button position after overlay size updates
-    setTimeout(applySavedButtonPos, 0);
-  }
-
   function updateOverlay() {
     if (!currentVideo || !document.contains(currentVideo) || !isVisible(currentVideo)) {
-      const v = findBestVideo();
-      if (!v) {
-        overlay.style.display = "none";
-        return;
-      }
+      currentVideo = findBestVideo();
+      if (!currentVideo) { overlay.style.display = "none"; return; }
       overlay.style.display = "";
-      anchorToVideo(v);
-      return;
     }
 
-    overlay.style.display = "";
-
     const r = currentVideo.getBoundingClientRect();
-    // Align overlay exactly over the video box
     overlay.style.left = `${Math.round(r.left)}px`;
     overlay.style.top = `${Math.round(r.top)}px`;
     overlay.style.width = `${Math.round(r.width)}px`;
     overlay.style.height = `${Math.round(r.height)}px`;
 
-    // Clamp button after resize
-    applySavedButtonPos();
-
-    // Make sure input stays above everything
-    // (it’s in overlay with huge z-index, so it should)
+    applySavedBtnPos();
   }
 
-  // Keep it glued during scroll/layout changes
-  function tick() {
+  (function tick() {
     updateOverlay();
     requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
+  })();
 
-  // Also react to DOM changes (video replacement, etc.)
   const mo = new MutationObserver(() => {
     const v = findBestVideo();
-    if (v && v !== currentVideo) anchorToVideo(v);
+    if (v && v !== currentVideo) currentVideo = v;
   });
   mo.observe(document.documentElement, { childList: true, subtree: true });
-
 })();
