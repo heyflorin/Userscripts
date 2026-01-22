@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         JetKVM - Keys
+// @name         JetKVM - Keyboard
 // @namespace    https://example.com/
-// @version      3.0.0
-// @description  Viewport-pinned keyboard HUD for iPad. Avoids <video> overlay compositor issues by staying outside the video rectangle.
+// @version      3.1.0
+// @description  Viewport HUD keyboard toggle for iPad. Fixes input tap by avoiding pointer-events:none on ancestors and blocking app capture handlers without preventDefault.
 // @author       Florin
 // @match        https://app.jetkvm.com/v/*
 // @run-at       document-idle
@@ -12,33 +12,29 @@
 (() => {
   "use strict";
 
-  const STORE_X = "us_kb_hud_x_v1";
+  const STORE_X = "us_kb_hud_x_v2";
 
   const css = `
     .us-kb-hud {
       position: fixed;
-      left: 0;
-      right: 0;
+      left: 0; right: 0;
       bottom: env(safe-area-inset-bottom, 0px);
       height: 64px;
       z-index: 2147483647;
-      pointer-events: none;
+      pointer-events: auto; /* IMPORTANT: allow hit-testing in iOS */
     }
     .us-kb-hud-inner {
       position: absolute;
-      left: 0;
-      right: 0;
+      left: 0; right: 0;
       bottom: 10px;
       height: 44px;
-      pointer-events: none;
+      pointer-events: none; /* background passes through */
     }
 
     .us-kb-btn {
       position: absolute;
-      left: 12px;
-      bottom: 0;
-      width: 44px;
-      height: 44px;
+      left: 12px; bottom: 0;
+      width: 44px; height: 44px;
       border-radius: 999px;
       border: 1px solid rgba(255,255,255,0.25);
       background: rgba(0,0,0,0.55);
@@ -49,7 +45,7 @@
       user-select: none;
       -webkit-user-select: none;
       touch-action: none;
-      pointer-events: auto;
+      pointer-events: auto; /* clickable */
       backdrop-filter: blur(6px);
       -webkit-backdrop-filter: blur(6px);
       box-shadow: 0 6px 18px rgba(0,0,0,0.25);
@@ -58,14 +54,12 @@
 
     .us-kb-bar {
       position: absolute;
-      left: 10px;
-      right: 10px;
-      bottom: 0;
+      left: 10px; right: 10px; bottom: 0;
       height: 44px;
       display: none;
       gap: 8px;
       align-items: center;
-      pointer-events: auto;
+      pointer-events: auto; /* clickable */
     }
     .us-kb-input {
       flex: 1;
@@ -78,12 +72,12 @@
       font: 16px/44px -apple-system, BlinkMacSystemFont, "SF Pro Text","Helvetica Neue", Arial, sans-serif;
       outline: none;
       -webkit-appearance: none;
+      pointer-events: auto;
     }
     .us-kb-input::placeholder { color: rgba(255,255,255,0.6); }
 
     .us-kb-close {
-      width: 44px;
-      height: 44px;
+      width: 44px; height: 44px;
       border-radius: 12px;
       border: 1px solid rgba(255,255,255,0.25);
       background: rgba(0,0,0,0.55);
@@ -93,6 +87,7 @@
       user-select: none;
       -webkit-user-select: none;
       touch-action: manipulation;
+      pointer-events: auto;
     }
   `;
 
@@ -144,7 +139,18 @@
   bar.appendChild(close);
   inner.appendChild(bar);
 
-  // Forward events (optional hooks for your app)
+  // Critical: stop the remote-desktop app’s global event handlers from cancelling focus.
+  // Use CAPTURE, stop propagation, BUT DO NOT preventDefault (we want native focus).
+  const stopAppCapture = (e) => {
+    e.stopImmediatePropagation();
+    // no preventDefault here
+  };
+  ["touchstart", "touchend", "pointerdown", "pointerup", "mousedown", "mouseup"].forEach((t) => {
+    input.addEventListener(t, stopAppCapture, true);
+    close.addEventListener(t, stopAppCapture, true);
+  });
+
+  // Optional hooks for your app
   input.addEventListener("beforeinput", (e) => {
     window.dispatchEvent(new CustomEvent("us-remote-beforeinput", {
       detail: { inputType: e.inputType, data: e.data }
@@ -158,6 +164,7 @@
   });
 
   input.addEventListener("keydown", (e) => {
+    // Don’t let arrows/space scroll the page while typing
     e.preventDefault();
     window.dispatchEvent(new CustomEvent("us-remote-keydown", {
       detail: {
@@ -232,7 +239,6 @@
     moved = false;
   });
 
-  // click fallback
   btn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
