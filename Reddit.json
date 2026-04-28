@@ -1,0 +1,265 @@
+{
+  "canopy": true,
+  "version": 1,
+  "origin": "www.reddit.com",
+  "rules": [
+    {
+      "styles": {
+        "transform": "scaleX(-1)"
+      },
+      "enabled": true,
+      "selector": "#reddit-logo > span > svg",
+      "label": "Reverse Logo",
+      "action": "style"
+    },
+    {
+      "label": "Right Sidebar",
+      "enabled": true,
+      "selector": "#right-sidebar-container",
+      "action": "remove"
+    },
+    {
+      "label": "Games Section",
+      "enabled": true,
+      "selector": "#left-sidebar > nav > faceplate-tracker > games-section-badge-controller",
+      "action": "remove"
+    },
+    {
+      "label": "Extra HR",
+      "enabled": true,
+      "selector": "#left-sidebar > nav > hr:nth-of-type(2)",
+      "action": "remove"
+    },
+    {
+      "label": "No \"Start Community\"",
+      "enabled": true,
+      "selector": "#left-sidebar > nav > left-nav-top-section > li:nth-of-type(4)",
+      "action": "remove"
+    },
+    {
+      "label": "No Ad Icon",
+      "enabled": true,
+      "selector": "div:nth-of-type(3) > div:nth-of-type(1) > span:nth-of-type(1) > span",
+      "action": "remove"
+    },
+    {
+      "label": "No \"Create\" text",
+      "enabled": true,
+      "selector": "#create-post > span > span:nth-of-type(2)",
+      "action": "remove"
+    },
+    {
+      "styles": {
+        "padding": "25px",
+        "border": "1px #333 dashed"
+      },
+      "enabled": true,
+      "selector": "shreddit-post[id^=\"t3_\"]",
+      "label": "Article: Inner padding & border",
+      "action": "style"
+    },
+    {
+      "label": "Remove lines",
+      "enabled": true,
+      "selector": "hr[class^=\"border-\"], hr[class*=\" border-\"]",
+      "action": "hide"
+    },
+    {
+      "styles": {
+        "top": "0",
+        "height": "100vh"
+      },
+      "enabled": true,
+      "selector": "div[id^=\"flex-left-nav-\"]",
+      "label": "Sidebar: Shift up",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "height": "100vh"
+      },
+      "enabled": true,
+      "selector": "#left-sidebar",
+      "label": "Sidebar: Full height",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "z-index": "99999"
+      },
+      "enabled": true,
+      "selector": "#left-sidebar-container",
+      "label": "Sidebar: To top",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "margin-left": "30px"
+      },
+      "enabled": true,
+      "selector": "reddit-header-large > reddit-header-action-items > header > nav",
+      "action": "style"
+    },
+    {
+      "label": "Recommendations (Inline)",
+      "enabled": true,
+      "selector": "div > shreddit-feed > faceplate-batch:nth-of-type(1) > in-feed-community-recommendations",
+      "action": "remove"
+    },
+    {
+      "styles": {
+        "margin-top": "5px",
+        "margin-left": "10px",
+        "margin-right": "10px"
+      },
+      "enabled": true,
+      "selector": "#subgrid-container > div:nth-of-type(1) > div",
+      "action": "style"
+    },
+    {
+      "enabled": true,
+      "action": "hide",
+      "selector": "#main-content > custom-feed > div:nth-of-type(1) > div"
+    },
+    {
+      "styles": {
+        "margin-top": "0px",
+        "margin-bottom": "0px",
+        "margin-left": "20px"
+      },
+      "enabled": true,
+      "selector": "#main-content > custom-feed > div:nth-of-type(1)",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "padding-left": "10px",
+        "margin-bottom": "10px"
+      },
+      "enabled": true,
+      "selector": "#main-content > div",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "margin-top": "15px"
+      },
+      "enabled": true,
+      "selector": "#main-content > shreddit-title",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "display": "flex",
+        "align-self": "center"
+      },
+      "enabled": true,
+      "selector": "#subgrid-container > div",
+      "action": "style"
+    },
+    {
+      "enabled": true,
+      "action": "remove",
+      "selector": "nav.z-2 > hr.w-100.my-sm.border-neutral-border-weak"
+    },
+    {
+      "enabled": true,
+      "action": "remove",
+      "selector": "#RESOURCES > hr.my-sm"
+    },
+    {
+      "styles": {
+        "border-bottom": "none",
+        "margin-bottom": "0px",
+        "padding-bottom": "0px"
+      },
+      "enabled": true,
+      "selector": "#recent-communities-section",
+      "action": "style"
+    },
+    {
+      "enabled": true,
+      "action": "remove",
+      "selector": "#left-sidebar > nav > div:nth-of-type(2)"
+    },
+    {
+      "styles": {
+        "padding-top": "5px"
+      },
+      "enabled": true,
+      "selector": "#RECENT",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "position": "absolute"
+      },
+      "enabled": true,
+      "selector": "body > shreddit-app > reddit-header-large",
+      "action": "style"
+    },
+    {
+      "enabled": true,
+      "action": "remove",
+      "selector": "#reddit-logo"
+    },
+    {
+      "styles": {
+        "display": "block"
+      },
+      "enabled": true,
+      "selector": "#subgrid-container > div:nth-of-type(1)",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "border-top": "1px solid #444",
+        "margin-top": "0px",
+        "z-index": "99999"
+      },
+      "enabled": true,
+      "selector": "body > navigation-indicator",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "margin": "0 auto",
+        "zoom": "0.8"
+      },
+      "enabled": true,
+      "selector": "div:nth-of-type(2) > div > div > search-dynamic-id-cache-controller",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "align-items": "center"
+      },
+      "enabled": true,
+      "selector": "header > nav > div:nth-of-type(2) > div",
+      "action": "style"
+    },
+    {
+      "enabled": true,
+      "action": "remove",
+      "selector": "#advertise-button"
+    },
+    {
+      "styles": {
+        "margin-top": "25px",
+        "zoom": "0.9",
+        "margin-right": "2px"
+      },
+      "enabled": true,
+      "selector": "button[id^=\"flex-nav-\"]",
+      "action": "style"
+    },
+    {
+      "styles": {
+        "margin-top": "1px"
+      },
+      "enabled": true,
+      "selector": "nav > div:nth-of-type(2) > div > div",
+      "action": "style"
+    }
+  ]
+}
