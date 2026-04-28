@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.8
+// @version      0.3.15
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
@@ -75,6 +75,11 @@
             shreddit-feed faceplate-partial {
                 margin: 0 !important;
                 box-sizing: border-box !important;
+                /* Tell Safari each card is an isolated paint surface. Helps
+                   it re-rasterize only the tiles that actually changed after
+                   a visual zoom (Smart Zoom) instead of repainting the whole
+                   tall feed region. */
+                contain: layout paint !important;
             }
             custom-feed-header {
                 display: block !important;
