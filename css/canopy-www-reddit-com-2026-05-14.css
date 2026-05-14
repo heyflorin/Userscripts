@@ -1,6 +1,6 @@
 /* Canopy rules for www.reddit.com */
 /* Exported 2026-05-14 */
-/* 35 rules */
+/* 34 rules */
 
 /* Rule 1: Reverse Logo — style */
 #reddit-logo > span > svg {
@@ -184,10 +184,5 @@ nav > div:nth-of-type(2) > div > div {
 
 /* Rule 34: Alert Banner: Remove — remove */
 body > shreddit-app > alert-controller {
-  display: none !important;
-}
-
-/* Rule 35: rpl-tooltip — remove */
-rpl-tooltip {
   display: none !important;
 }
