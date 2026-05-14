@@ -215,7 +215,9 @@
     // those scrollend-driven layouts during the gesture; window resize and
     // ⌘+/⌘− leave vv.scale at 1, so they still flow through.
     const vv = window.visualViewport;
-    const isVvZoomedIn = () => vv ? Math.abs(vv.scale - 1) > 0.01 : false;
+    // Only bail on zoom-IN (Safari Smart Zoom). Don't gate on zoom-out, since
+    // some Safari configs report initial scale below 1 and we'd never lay out.
+    const isVvZoomedIn = () => vv ? vv.scale > 1.01 : false;
 
     let layoutScheduled = false;
     function requestLayout() {
