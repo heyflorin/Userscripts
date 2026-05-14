@@ -1,0 +1,183 @@
+/* Canopy rules for www.reddit.com */
+/* Exported 2026-05-14 */
+/* 33 rules */
+
+/* Rule 1: Reverse Logo — style */
+#reddit-logo > span > svg {
+  display: none !important;
+  transform: scaleX(-1) !important;
+}
+
+/* Rule 2: Right Sidebar — remove */
+#right-sidebar-container {
+  display: none !important;
+}
+
+/* Rule 3: Games Section — remove */
+#left-sidebar > nav > faceplate-tracker > games-section-badge-controller {
+  display: none !important;
+}
+
+/* Rule 4: Extra HR — remove */
+#left-sidebar > nav > hr:nth-of-type(2) {
+  display: none !important;
+}
+
+/* Rule 5: No "Start Community" — remove */
+#left-sidebar > nav > left-nav-top-section > li:nth-of-type(4) {
+  display: none !important;
+}
+
+/* Rule 6: No Ad Icon — remove */
+div:nth-of-type(3) > div:nth-of-type(1) > span:nth-of-type(1) > span {
+  display: none !important;
+}
+
+/* Rule 7: No "Create" text — remove */
+#create-post > span > span:nth-of-type(2) {
+  display: none !important;
+}
+
+/* Rule 8: Article: Inner padding & border — style */
+shreddit-post[id^="t3_"] {
+  padding: 25px !important;
+  border: 1px #333 dashed !important;
+}
+
+/* Rule 9: Remove lines — hide */
+hr[class^="border-"], hr[class*=" border-"] {
+  display: none !important;
+}
+
+/* Rule 10: Sidebar: Shift up — style */
+div[id^="flex-left-nav-"] {
+  top: 0 !important;
+  height: 100vh !important;
+}
+
+/* Rule 11: Sidebar: Full height — style */
+#left-sidebar {
+  height: 100vh !important;
+}
+
+/* Rule 12: Sidebar: To top — style */
+#left-sidebar-container {
+  z-index: 5 !important;
+}
+
+/* Rule 13: reddit-header-large > reddit-header-action-items > header > nav (disabled) — style */
+reddit-header-large > reddit-header-action-items > header > nav {
+  margin-left: 30px !important;
+}
+
+/* Rule 14: Recommendations (Inline) — remove */
+div > shreddit-feed > faceplate-batch:nth-of-type(1) > in-feed-community-recommendations {
+  display: none !important;
+}
+
+/* Rule 15: #subgrid-container > div:nth-of-type(1) > div — style */
+#subgrid-container > div:nth-of-type(1) > div {
+  margin-top: 5px !important;
+  margin-left: 10px !important;
+  margin-right: 10px !important;
+}
+
+/* Rule 16: #main-content > custom-feed > div:nth-of-type(1) > div — hide */
+#main-content > custom-feed > div:nth-of-type(1) > div {
+  display: none !important;
+}
+
+/* Rule 17: #main-content > custom-feed > div:nth-of-type(1) — style */
+#main-content > custom-feed > div:nth-of-type(1) {
+  margin-top: 0px !important;
+  margin-bottom: 0px !important;
+  margin-left: 20px !important;
+}
+
+/* Rule 18: #main-content > div — style */
+#main-content > div {
+  padding-left: 10px !important;
+  margin-bottom: 10px !important;
+}
+
+/* Rule 19: #main-content > shreddit-title — style */
+#main-content > shreddit-title {
+  margin-top: 15px !important;
+}
+
+/* Rule 20: #subgrid-container > div — style */
+#subgrid-container > div {
+  display: flex !important;
+  align-self: center !important;
+}
+
+/* Rule 21: nav.z-2 > hr.w-100.my-sm.border-neutral-border-weak — remove */
+nav.z-2 > hr.w-100.my-sm.border-neutral-border-weak {
+  display: none !important;
+}
+
+/* Rule 22: #RESOURCES > hr.my-sm — remove */
+#RESOURCES > hr.my-sm {
+  display: none !important;
+}
+
+/* Rule 23: #recent-communities-section — style */
+#recent-communities-section {
+  border-bottom: none !important;
+  margin-bottom: 0px !important;
+  padding-bottom: 0px !important;
+}
+
+/* Rule 24: #left-sidebar > nav > div:nth-of-type(2) — remove */
+#left-sidebar > nav > div:nth-of-type(2) {
+  display: none !important;
+}
+
+/* Rule 25: #RECENT — style */
+#RECENT {
+  padding-top: 5px !important;
+}
+
+/* Rule 26: body > shreddit-app > reddit-header-large — style */
+body > shreddit-app > reddit-header-large {
+  position: absolute !important;
+}
+
+/* Rule 27: Logo: Remove (disabled) — remove */
+#reddit-logo {
+  display: none !important;
+}
+
+/* Rule 28: #subgrid-container > div:nth-of-type(1) — style */
+#subgrid-container > div:nth-of-type(1) {
+  display: block !important;
+}
+
+/* Rule 29: Header: Top border line — style */
+body > navigation-indicator {
+  border-top: 1px solid #444 !important;
+  zoom: 1.5 !important;
+  z-index: 99999 !important;
+}
+
+/* Rule 30: header > nav > div:nth-of-type(2) > div — style */
+header > nav > div:nth-of-type(2) > div {
+  align-items: center !important;
+}
+
+/* Rule 31: #advertise-button — remove */
+#advertise-button {
+  display: none !important;
+}
+
+/* Rule 32: button[id^="flex-nav-"] — style */
+button[id^="flex-nav-"] {
+  margin-top: 25px !important;
+  zoom: 0.9 !important;
+  margin-right: 2px !important;
+}
+
+/* Rule 33: nav > div:nth-of-type(2) > div > div — style */
+nav > div:nth-of-type(2) > div > div {
+  margin-top: 1px !important;
+}
