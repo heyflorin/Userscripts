@@ -1,6 +1,6 @@
 /* Canopy rules for www.reddit.com */
 /* Exported 2026-05-14 */
-/* 33 rules */
+/* 34 rules */
 
 /* Rule 1: Reverse Logo — style */
 #reddit-logo > span > svg {
@@ -180,4 +180,9 @@ button[id^="flex-nav-"] {
 /* Rule 33: nav > div:nth-of-type(2) > div > div — style */
 nav > div:nth-of-type(2) > div > div {
   margin-top: 1px !important;
+}
+
+/* Rule 34: Alert Banner: Remove — remove */
+body > shreddit-app > alert-controller {
+  display: none !important;
 }
