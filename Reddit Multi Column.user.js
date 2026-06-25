@@ -305,7 +305,7 @@
         const hasStructuralChange = mutations.some(m => {
             if (m.type === 'childList') return true;
             // Ignore attribute changes on elements we've positioned
-            if (m.type === 'attributes' && m.target && m.target.dataset && m.target.dataset.rmcKey) return false;
+            if (m.type === 'attributes' && m.target instanceof Element && m.target.dataset.rmcKey) return false;
             return true;
         });
         if (!hasStructuralChange) return;
