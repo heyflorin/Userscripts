@@ -3,18 +3,24 @@
 
     if (!/(^|\.)reddit\.com$/.test(location.hostname)) return;
 
-    // ── Configuration ─────────────────────────────────────────────────────
-    const MIN_COL_WIDTH = 400;
+    const MIN_WIDTH = 400;
+    const COLUMNS = 4;
+
     const HGAP = 17;
     const VGAP = 12;
 
-    // ── State ─────────────────────────────────────────────────────────────
-    let currentPath = location.pathname;
-    let active = false;       // true when multi-column CSS is applied
-    let currentCols = 0;      // last column-count we set
-    let cleanup = false;      // true → non-card view, disable multi-column
+    // Selectors for actual post items that should be laid out in columns.
+    // IMPORTANT: faceplate-partial is NOT included here — it is Reddit's
+    // lazy-load sentinel and must remain in normal document flow so that
+    // IntersectionObserver can trigger infinite scroll loading.
+    const POST_ITEM_SELECTOR = 'article, shreddit-post, shreddit-ad-post';
 
-    // ── View-mode detection ───────────────────────────────────────────────
+    let columns = COLUMNS;
+    let cleanup = false;
+
+    let parent = null;
+    let currentPath = location.pathname;
+
     const cardIcon = () => {
         const selectors = [
             'shreddit-sort-dropdown[header-text="View"]',
@@ -30,77 +36,66 @@
         }
         return undefined;
     };
-    const shouldClean = (icon) =>
-        icon === undefined ? false : icon.getAttribute('icon-name') !== "view-card-outline";
+    const shouldClean = (icon) => icon === undefined ? false : icon.getAttribute('icon-name') !== "view-card-outline";
 
-    // ── CSS injection ─────────────────────────────────────────────────────
-    // The entire multi-column layout is handled by the browser's native CSS
-    // column engine.  Zero JS height reads, zero absolute positioning, zero
-    // reflow loops.
+    let postMap = new Map();
+    let nextSyntheticId = 0;
 
-    const injectStyles = function() {
-        if (document.getElementById('rmc-styles')) return;
+    const indexOfSmallest = function (a) {
+        let lowest = 0;
+        for (let i = 1; i < a.length; i++) {
+            if (a[i] < (a[lowest] - 1)) lowest = i;
+        }
+        return lowest;
+    };
+
+    const stableKey = function(el) {
+        if (el.dataset.rmcId) return el.dataset.rmcId;
+        const candidate =
+            el.getAttribute('aria-label') ||
+            el.getAttribute('id') ||
+            el.getAttribute('data-testid') ||
+            el.getAttribute('data-fullname') ||
+            el.getAttribute('data-post-id') ||
+            el.querySelector('[data-post-id]')?.getAttribute('data-post-id') ||
+            el.querySelector('a[href*="/comments/"]')?.getAttribute('href');
+        if (candidate) {
+            el.dataset.rmcId = candidate;
+            return candidate;
+        }
+        const synth = `rmc-synth-${nextSyntheticId++}`;
+        el.dataset.rmcId = synth;
+        return synth;
+    };
+
+    const injectResetStyles = function() {
+        if (document.getElementById('rmc-margin-reset')) return;
         const style = document.createElement('style');
-        style.id = 'rmc-styles';
+        style.id = 'rmc-margin-reset';
         style.textContent = `
-            /* ── Widen the content area ───────────────────────────── */
             main {
-                max-width: 100% !important;
                 padding-left: 0 !important;
                 padding-right: 0 !important;
             }
             div.subgrid-container {
-                max-width: 100% !important;
-                width: 100% !important;
                 padding-left: 0 !important;
                 padding-right: 0 !important;
             }
-            #right-sidebar-container {
-                display: none !important;
-            }
-
-            /* ── Feed becomes a CSS-column container ─────────────── */
-            shreddit-feed.rmc-active {
-                display: block !important;
-                padding: ${VGAP}px ${HGAP}px !important;
+            shreddit-feed {
+                padding: 0 !important;
                 margin: 0 !important;
                 box-sizing: border-box !important;
-                column-gap: ${HGAP}px !important;
+                display: block !important;
             }
-
-            /* faceplate-batch wraps groups of posts; make it
-               transparent to the column layout so individual posts
-               flow independently across columns. */
-            shreddit-feed.rmc-active > faceplate-batch {
-                display: contents !important;
-            }
-
-            /* Individual posts: avoid breaking mid-post */
-            shreddit-feed.rmc-active > article,
-            shreddit-feed.rmc-active > shreddit-post,
-            shreddit-feed.rmc-active > shreddit-ad-post,
-            shreddit-feed.rmc-active > faceplate-batch > article,
-            shreddit-feed.rmc-active > faceplate-batch > shreddit-post,
-            shreddit-feed.rmc-active > faceplate-batch > shreddit-ad-post {
-                break-inside: avoid !important;
-                margin-bottom: ${VGAP}px !important;
-                margin-top: 0 !important;
-                margin-left: 0 !important;
-                margin-right: 0 !important;
+            shreddit-feed > article,
+            shreddit-feed > shreddit-post,
+            shreddit-feed > shreddit-ad-post,
+            shreddit-feed > faceplate-batch > article,
+            shreddit-feed > faceplate-batch > shreddit-post,
+            shreddit-feed > faceplate-batch > shreddit-ad-post {
+                margin: 0 !important;
                 box-sizing: border-box !important;
-                overflow: hidden !important;
             }
-
-            /* Lazy-load sentinels span all columns so Reddit's
-               IntersectionObserver still fires when the user scrolls
-               to the bottom.  column-span:all forces a column break
-               before/after, keeping batches above independent. */
-            shreddit-feed.rmc-active > faceplate-partial {
-                break-inside: avoid !important;
-                column-span: all !important;
-            }
-
-            /* Custom feed header */
             custom-feed-header {
                 display: block !important;
                 margin-left: 25px !important;
@@ -110,7 +105,22 @@
         (document.head || document.documentElement).appendChild(style);
     };
 
-    // ── Width-constraint stripping ────────────────────────────────────────
+    // --- Per-article size tracking -----------------------------------------
+    let inLayout = false;
+    const resizeObserver = new ResizeObserver(() => {
+        if (inLayout) return;
+        requestLayout();
+    });
+    const observedArticles = new WeakSet();
+
+    const observeArticleSize = function(article) {
+        if (observedArticles.has(article)) return;
+        observedArticles.add(article);
+        resizeObserver.observe(article);
+    };
+
+    // --- Layout ------------------------------------------------------------
+
     const stripWidthConstraints = function(el) {
         if (!el) return;
         const toRemove = [...el.classList].filter(
@@ -119,111 +129,252 @@
         if (toRemove.length) el.classList.remove(...toRemove);
     };
 
-    // ── Column-count calculation ──────────────────────────────────────────
-    // This is the ONLY layout work JS does — one style write per resize.
+    const makeLayout = function() {
+        if (cleanup) return;
+        if (!parent || !parent.isConnected) return;
 
-    const updateColumnCount = function() {
-        const feed = document.querySelector('shreddit-feed');
-        if (!feed) return;
-
-        if (cleanup) {
-            if (active) deactivateFeed(feed);
-            return;
-        }
-
-        // One-time ancestor adjustments
-        if (!active) {
-            const mainContainer = document.querySelector('div.main-container');
+        inLayout = true;
+        try {
+        if (parent.style.position !== "relative") {
+            const main = document.querySelector("main");
+            if (main) main.style.maxWidth = "100%";
+            const mainContainer = document.querySelector("div.main-container");
             if (mainContainer) {
-                mainContainer.className = [...mainContainer.classList]
-                    .filter(c => !c.includes(':grid-cols-')).join(' ');
+                mainContainer.className = [...mainContainer.classList].filter(c => !c.includes(":grid-cols-")).join(" ");
             }
-            const subgrid = document.querySelector('div.subgrid-container');
+            const subgrid = document.querySelector("div.subgrid-container");
             stripWidthConstraints(subgrid);
-            feed.classList.add('rmc-active');
-            active = true;
-        }
-
-        const width = feed.clientWidth || window.innerWidth;
-        const cols = Math.max(1, Math.floor((width + HGAP) / (MIN_COL_WIDTH + HGAP)));
-        if (cols !== currentCols) {
-            currentCols = cols;
-            feed.style.columnCount = String(cols);
-        }
-    };
-
-    const deactivateFeed = function(feed) {
-        if (!feed) feed = document.querySelector('shreddit-feed');
-        if (feed) {
-            feed.classList.remove('rmc-active');
-            feed.style.columnCount = '';
-        }
-        active = false;
-        currentCols = 0;
-    };
-
-    // ── Resize handling (debounced via rAF) ────────────────────────────────
-    let resizeRaf = 0;
-    window.addEventListener('resize', () => {
-        if (resizeRaf) return;
-        resizeRaf = requestAnimationFrame(() => {
-            resizeRaf = 0;
-            updateColumnCount();
-        });
-    });
-
-    // ── Feed discovery & activation ───────────────────────────────────────
-    let feedObserver = null;
-
-    const tryActivate = function() {
-        const feed = document.querySelector('shreddit-feed');
-        if (!feed) return false;
-        injectStyles();
-        updateColumnCount();
-        return true;
-    };
-
-    // Watch for the feed element to appear (SPA navigation, lazy render).
-    // Uses a single MutationObserver on document.body — lightweight because
-    // it only watches childList (not attributes or subtree characterData).
-    const waitForFeed = function() {
-        if (tryActivate()) return;
-        if (feedObserver) return; // already watching
-        feedObserver = new MutationObserver(() => {
-            if (tryActivate()) {
-                feedObserver.disconnect();
-                feedObserver = null;
+            if (subgrid) {
+                subgrid.style.maxWidth = "100%";
+                subgrid.style.width = "100%";
             }
+            const sidebar = document.getElementById("right-sidebar-container");
+            if (sidebar) sidebar.style.display = "none";
+            parent.style.position = "relative";
+        }
+
+        const containerWidth = parent.clientWidth;
+
+        columns = Math.max(1, Math.floor((containerWidth - HGAP) / (MIN_WIDTH + HGAP)));
+
+        const totalHGapPx = HGAP * (columns + 1);
+        const colWidthPx = (containerWidth - totalHGapPx) / columns;
+
+        // Only select actual post items — NOT faceplate-partial (lazy-load sentinels)
+        const nodes = [...parent.querySelectorAll(POST_ITEM_SELECTOR)];
+
+        // Filter to only direct layout items (skip deeply nested elements)
+        const layoutNodes = nodes.filter(n => {
+            let p = n.parentNode;
+            while (p && p !== parent) {
+                const tag = p.tagName ? p.tagName.toLowerCase() : '';
+                if (tag === 'faceplate-batch') {
+                    p = p.parentNode;
+                    continue;
+                }
+                break;
+            }
+            return p === parent;
         });
-        feedObserver.observe(document.body, { childList: true, subtree: true });
+
+        // Reset postMap to only contain currently-visible items.
+        // This prevents stale entries from removed posts affecting layout.
+        const currentKeys = new Set();
+        for (const article of layoutNodes) {
+            const key = stableKey(article);
+            currentKeys.add(key);
+            observeArticleSize(article);
+
+            const h = article.offsetHeight;
+            if (postMap.has(key)) {
+                const post = postMap.get(key);
+                if (post.height !== h) post.height = h;
+            } else {
+                postMap.set(key, { height: h, col: 0, top: 0 });
+            }
+        }
+
+        // Remove entries that are no longer in the DOM
+        for (const key of postMap.keys()) {
+            if (!currentKeys.has(key)) postMap.delete(key);
+        }
+
+        let tops = Array(columns).fill(VGAP);
+        for (const post of postMap.values()) {
+            post.col = indexOfSmallest(tops);
+            post.top = tops[post.col];
+            tops[post.col] += post.height + VGAP;
+        }
+
+        const height = Math.max(...tops);
+        if (height > VGAP) {
+            parent.style.height = height + "px";
+        }
+
+        for (const article of layoutNodes) {
+            const key = stableKey(article);
+            const entry = postMap.get(key) ?? { col: 0, top: tops[0] };
+            const leftPx = HGAP + entry.col * (colWidthPx + HGAP);
+            const layoutKey = `${colWidthPx.toFixed(2)}|${entry.top}|${leftPx.toFixed(2)}`;
+            if (article.dataset.rmcKey === layoutKey) continue;
+            article.dataset.rmcKey = layoutKey;
+            article.style.position = 'absolute';
+            article.style.width = colWidthPx + 'px';
+            article.style.top = entry.top + 'px';
+            article.style.left = leftPx + 'px';
+            article.style.margin = '0';
+        }
+
+        // Ensure faceplate-partial (lazy-load sentinels) and faceplate-batch
+        // wrappers are positioned at the bottom of the container so that
+        // scrolling triggers Reddit's IntersectionObserver for infinite scroll.
+        let bottomOffset = height;
+        for (const partial of parent.querySelectorAll(':scope > faceplate-partial, :scope > faceplate-batch')) {
+            partial.style.position = 'absolute';
+            partial.style.top = bottomOffset + 'px';
+            partial.style.left = '0';
+            partial.style.width = '100%';
+            partial.style.height = 'auto';
+            const partialH = partial.offsetHeight || 100;
+            bottomOffset += partialH;
+        }
+        if (bottomOffset > height) {
+            parent.style.height = bottomOffset + 'px';
+        }
+
+        } finally {
+            inLayout = false;
+        }
     };
 
-    // ── View-mode observer ────────────────────────────────────────────────
-    const layoutSwitch = new MutationObserver(() => {
+    const vv = window.visualViewport;
+    const isVvZoomedIn = () => vv ? vv.scale > 1.01 : false;
+
+    let layoutScheduled = false;
+    function requestLayout() {
+        if (isVvZoomedIn()) return;
+        if (layoutScheduled) return;
+        layoutScheduled = true;
+        requestAnimationFrame(() => {
+            layoutScheduled = false;
+            makeLayout();
+        });
+    }
+
+    const setLayout = function(changes, observer) {
         const c = shouldClean(cardIcon());
         if (c !== cleanup) {
             cleanup = c;
-            updateColumnCount();
+            requestLayout();
         }
-    });
-
-    const observeViewMode = function() {
-        const icon = cardIcon();
-        if (icon) layoutSwitch.observe(icon, { attributes: true });
     };
 
-    // ── SPA navigation handling ───────────────────────────────────────────
+    let pageChangeTimer = null;
+    const pageChange = new MutationObserver(() => {
+        if (pageChangeTimer) clearTimeout(pageChangeTimer);
+        pageChangeTimer = setTimeout(() => {
+            pageChangeTimer = null;
+            requestLayout();
+        }, 100);
+    });
+    const layoutSwitch = new MutationObserver(setLayout);
+
+    window.addEventListener('resize', requestLayout);
+
+    const disconnectPageObservers = function() {
+        pageChange.disconnect();
+        layoutSwitch.disconnect();
+    };
+
+    // --- Feed container discovery ------------------------------------------
+    const findParentStrategies = [
+        () => document.querySelector('shreddit-feed'),
+        () => {
+            const anchor = document.querySelector('article + hr + faceplate-partial');
+            return anchor ? anchor.parentNode : null;
+        },
+        () => {
+            const first = document.querySelector('main article');
+            if (!first) return null;
+            let el = first.parentNode;
+            while (el && el !== document.body) {
+                if (el.querySelectorAll(':scope > article, :scope > shreddit-post').length >= 2) return el;
+                if (el.querySelectorAll('article, shreddit-post').length >= 2) return el;
+                el = el.parentNode;
+            }
+            return null;
+        },
+    ];
+
+    const findParent = function() {
+        for (const strategy of findParentStrategies) {
+            try {
+                const result = strategy();
+                if (result) return result;
+            } catch (_) { /* strategy failed, try next */ }
+        }
+        return null;
+    };
+
+    let searchDeadline = 0;
+    let searching = false;
+
+    const searchForFeed = function() {
+        const found = findParent();
+        if (found && found !== parent) {
+            parent = found;
+            parent.style.position = "";
+            parent.style.height = "";
+            postMap = new Map();
+            nextSyntheticId = 0;
+            resizeObserver.disconnect();
+            disconnectPageObservers();
+
+            pageChange.observe(parent, { childList: true, subtree: true });
+
+            const icon = cardIcon();
+            if (icon) {
+                layoutSwitch.observe(icon, { attributes: true });
+            }
+
+            requestLayout();
+            searching = false;
+            return;
+        }
+
+        if (found && found === parent) {
+            requestLayout();
+            searching = false;
+            return;
+        }
+
+        if (performance.now() < searchDeadline) {
+            requestAnimationFrame(searchForFeed);
+        } else {
+            searching = false;
+        }
+    };
+
+    const scheduleFeedSearch = function(budgetMs = 8000) {
+        searchDeadline = performance.now() + budgetMs;
+        if (!searching) {
+            searching = true;
+            requestAnimationFrame(searchForFeed);
+        }
+    };
+
     const onNavigate = function() {
         const pathChanged = location.pathname !== currentPath;
         currentPath = location.pathname;
 
         if (pathChanged) {
-            deactivateFeed();
-            layoutSwitch.disconnect();
+            parent = null;
+            disconnectPageObservers();
         }
-
-        waitForFeed();
-        observeViewMode();
+        if (!parent || !parent.isConnected) {
+            parent = null;
+        }
+        scheduleFeedSearch();
     };
 
     const patchHistory = function() {
@@ -245,13 +396,14 @@
         window.addEventListener('reddit-mc:locationchange', onNavigate);
     };
 
-    // Fallback: detect navigation via shreddit-app attribute changes
     const appObserver = new MutationObserver(() => {
-        if (location.pathname !== currentPath) onNavigate();
+        if (location.pathname !== currentPath) {
+            onNavigate();
+        }
     });
 
     const observeApp = function() {
-        const app = document.querySelector('shreddit-app');
+        const app = document.querySelector("shreddit-app");
         if (!app) {
             setTimeout(observeApp, 100);
             return;
@@ -259,13 +411,26 @@
         appObserver.observe(app, { attributes: true });
     };
 
-    // ── Entry point ───────────────────────────────────────────────────────
+    let safetyNetTimer = null;
+    const domSafetyNet = new MutationObserver(() => {
+        if (!parent || !parent.isConnected) {
+            if (safetyNetTimer) return;
+            safetyNetTimer = setTimeout(() => {
+                safetyNetTimer = null;
+                if (!parent || !parent.isConnected) {
+                    scheduleFeedSearch(2000);
+                }
+            }, 500);
+        }
+    });
+
     const start = function() {
-        injectStyles();
+        injectResetStyles();
         patchHistory();
         observeApp();
-        observeViewMode();
-        waitForFeed();
+        const main = document.querySelector("main") || document.body;
+        domSafetyNet.observe(main, { childList: true, subtree: true });
+        scheduleFeedSearch();
     };
 
     if (document.body) {
