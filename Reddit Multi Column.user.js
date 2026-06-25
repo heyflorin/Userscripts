@@ -172,11 +172,7 @@
     };
 
     // --- Per-article size tracking -----------------------------------------
-    let inLayout = false;
     const resizeObserver = new ResizeObserver(() => {
-        // Avoid feedback loop: makeLayout repositions articles which triggers
-        // ResizeObserver which calls requestLayout again, causing a blink.
-        if (inLayout) return;
         requestLayout();
     });
     const observedArticles = new WeakSet();
@@ -206,8 +202,6 @@
         if (cleanup) return;
         if (!parent || !parent.isConnected) return;
 
-        inLayout = true;
-        try {
         if (parent.style.position !== "relative") {
             const main = document.querySelector("main");
             if (main) main.style.maxWidth = "100%";
@@ -298,9 +292,6 @@
                 batch.style.height = [...batch.childNodes].reduce((h, c) => h + (c.clientHeight || 0), 0) + "px";
             }
         }
-        } finally {
-            inLayout = false;
-        }
     };
 
     // Safari Smart Zoom (double-tap on a Magic Trackpad) is a visual-viewport
@@ -330,19 +321,11 @@
         }
     };
 
-    let pageChangeTimer = null;
-    const pageChange = new MutationObserver(() => {
-        // Debounce: Reddit's feed generates many rapid childList mutations
-        // (e.g. batch loading). Coalesce them into a single layout pass.
-        if (pageChangeTimer) clearTimeout(pageChangeTimer);
-        pageChangeTimer = setTimeout(() => {
-            pageChangeTimer = null;
-            requestLayout();
-        }, 100);
-    });
+    const pageChange = new MutationObserver(requestLayout);
     const layoutSwitch = new MutationObserver(setLayout);
 
     window.addEventListener('resize', requestLayout);
+    window.addEventListener('scrollend', requestLayout);
 
     const disconnectPageObservers = function() {
         pageChange.disconnect();
@@ -420,9 +403,14 @@
         }
 
         if (found && found === parent) {
-            // Parent hasn't changed – just ensure layout is up to date
-            // without the destructive hide/reveal cycle that causes blinking.
+            postMap = new Map();
+            nextSyntheticId = 0;
+            resizeObserver.disconnect();
+            parent.style.position = "";
+            parent.style.height = "";
+            hideFeed();
             requestLayout();
+            settleTimer = setTimeout(revealFeed, SETTLE_MS);
             searching = false;
             return;
         }
@@ -475,12 +463,7 @@
         window.addEventListener('reddit-mc:locationchange', onNavigate);
     };
 
-    const appObserver = new MutationObserver(() => {
-        // Only trigger navigation handling when the URL actually changed.
-        if (location.pathname !== currentPath) {
-            onNavigate();
-        }
-    });
+    const appObserver = new MutationObserver(onNavigate);
 
     const observeApp = function() {
         const app = document.querySelector("shreddit-app");
@@ -491,17 +474,9 @@
         appObserver.observe(app, { attributes: true });
     };
 
-    let safetyNetTimer = null;
     const domSafetyNet = new MutationObserver(() => {
         if (!parent || !parent.isConnected) {
-            // Debounce: avoid firing repeatedly for rapid DOM changes.
-            if (safetyNetTimer) return;
-            safetyNetTimer = setTimeout(() => {
-                safetyNetTimer = null;
-                if (!parent || !parent.isConnected) {
-                    scheduleFeedSearch(2000);
-                }
-            }, 500);
+            scheduleFeedSearch(2000);
         }
     });
 
