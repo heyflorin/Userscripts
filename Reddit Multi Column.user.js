@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.21
+// @version      0.3.22
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
@@ -12,6 +12,28 @@
 // @updateURL https://update.greasyfork.org/scripts/371490/Reddit%20Multi%20Column.meta.js
 // ==/UserScript==
 /* jshint esversion: 6 */
+
+// --- 0.3.22 ------------------------------------------------------------------
+// Fixes the broken left nav on iOS / iPadOS (Home, Popular, News, Explore and
+// custom feeds never loading). Two causes, both addressed:
+//
+// 1. THE SAFARI `contain` HACK IS BACK OUT. 0.3.21 reintroduced
+//    `contain: layout paint !important` on the feed cards/partials as a paint
+//    optimization. That exact rule was removed once before specifically to fix
+//    mobile (commit "Fixed for mobile"), because on iOS Safari `contain` breaks
+//    IntersectionObserver-driven lazy content and causes whole regions to fail
+//    to paint — which is what stops Reddit's lazily-loaded left-nav sections and
+//    custom feeds from ever rendering. It's purely a desktop paint tweak, so it
+//    is dropped again rather than reworked.
+//
+// 2. STAND DOWN BELOW 2 COLUMNS (phones / portrait tablets). The grid only ever
+//    fits a single column on a narrow screen, so it adds no value there, yet it
+//    still rewrote Reddit's responsive chrome (widening <main>, stripping the
+//    grid container, hiding the sidebar) and fought the mobile nav drawer. The
+//    script now leaves Reddit completely native whenever fewer than MIN_COLUMNS
+//    columns fit, and re-engages (restoring chrome) when a wide layout returns,
+//    e.g. rotating an iPad to landscape.
+// -----------------------------------------------------------------------------
 
 // --- 0.3.21 ------------------------------------------------------------------
 // Don't apply the grid on mixed feeds. Profile overview / comments / saved /
@@ -80,6 +102,14 @@
     // Single symmetric gap, used for both the space between cards and the outer
     // margin on every side. (Was HGAP 17 / VGAP 12 — asymmetric.)
     const GAP = 16;
+
+    // Below this many columns the masonry adds nothing (a single column is just
+    // Reddit's native feed) while still rewriting the page chrome and fighting
+    // Reddit's responsive layout. On phones and portrait tablets the feed is
+    // only ever wide enough for one column, so we stand fully down there and let
+    // Reddit render natively — that's what keeps the mobile left-nav drawer and
+    // its lazily-loaded sections working.
+    const MIN_COLUMNS = 2;
 
     const SETTLE_MS = 180;
     const MAX_HIDE_MS = 1200;
@@ -189,11 +219,12 @@
             html.rmc-grid shreddit-feed faceplate-partial {
                 margin: 0 !important;
                 box-sizing: border-box !important;
-                /* Tell Safari each card is an isolated paint surface. Helps
-                   it re-rasterize only the tiles that actually changed after
-                   a visual zoom (Smart Zoom) instead of repainting the whole
-                   tall feed region. */
-                contain: layout paint !important;
+                /* NOTE: do NOT add a 'contain: layout paint' rule here. It looks
+                   like a harmless per-card paint optimization, but on iOS /
+                   iPadOS Safari it breaks IntersectionObserver-driven lazy
+                   loading and leaves whole regions unpainted — which is what
+                   stopped the left nav (Home/Popular/…) and custom feeds from
+                   loading. */
             }
             html.rmc-grid custom-feed-header {
                 display: block !important;
@@ -276,6 +307,21 @@
     // comments (and other content) with posts; if we absolutely-position only
     // the posts there, the comments stay in flow and the two overlap. On those
     // feeds we stand down and let Reddit render natively.
+    // How many columns the current feed width would yield. Kept identical to the
+    // math in makeLayout so the "too narrow → stand down" decision matches what
+    // would actually be rendered.
+    const columnCountFor = function(containerWidth) {
+        return Math.max(1, Math.floor((containerWidth - GAP) / (MIN_WIDTH + GAP)));
+    };
+
+    // True on phones / portrait tablets, where only a single column fits. There
+    // the grid is pointless and its chrome changes interfere with Reddit's
+    // mobile layout, so we leave the page native.
+    const isTooNarrow = function() {
+        if (!parent) return false;
+        return columnCountFor(parent.clientWidth) < MIN_COLUMNS;
+    };
+
     const isMixedFeed = function() {
         const path = location.pathname;
         if (/\/comments\//.test(path)) return true;        // post detail / profile comments
@@ -355,7 +401,7 @@
 
     const makeLayout = function() {
         if (!parent || !parent.isConnected) return;
-        if (cleanup || isMixedFeed()) {
+        if (cleanup || isMixedFeed() || isTooNarrow()) {
             standDown();
             return;
         }
@@ -364,7 +410,7 @@
         if (parent.style.position !== "relative") parent.style.position = "relative";
 
         const containerWidth = parent.clientWidth;
-        const newColumns = Math.max(1, Math.floor((containerWidth - GAP) / (MIN_WIDTH + GAP)));
+        const newColumns = columnCountFor(containerWidth);
         const colWidthPx = (containerWidth - GAP * (newColumns + 1)) / newColumns;
 
         const columnsChanged = newColumns !== columns;
@@ -552,15 +598,20 @@
             const icon = cardIcon();
             if (icon) layoutSwitch.observe(icon, { attributes: true });
         }
-        const mixed = isMixedFeed();
-        if (mixed) {
+        // Stand down for the same reasons makeLayout does: a mixed feed (grid
+        // would overlap comments) or a screen too narrow for the grid to help
+        // (phones / portrait tablets — leaving Reddit native keeps the mobile
+        // nav working). In both cases keep the feed visible instead of hiding
+        // and laying it out.
+        const standdown = isMixedFeed() || isTooNarrow();
+        if (standdown) {
             standDown();
             revealFeed();
         } else {
             hideFeed();
         }
         requestLayout();
-        if (!mixed) settleTimer = setTimeout(revealFeed, SETTLE_MS);
+        if (!standdown) settleTimer = setTimeout(revealFeed, SETTLE_MS);
     };
 
     const searchForFeed = function() {
