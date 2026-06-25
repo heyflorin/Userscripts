@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.15
+// @version      0.4.0
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
@@ -15,6 +15,9 @@
 
 (function() {
     'use strict';
+
+    if (!/(^|\.)reddit\.com$/.test(location.hostname)) return;
+
     const MIN_WIDTH = 400;
     const COLUMNS = 4;
 
@@ -25,16 +28,38 @@
     const MAX_HIDE_MS = 1200;
     const FADE_MS = 150;
 
+    // Selectors used to locate feed items inside the feed container. Kept in
+    // one place so they're easy to update when Reddit changes its DOM.
+    const FEED_ITEM_SELECTOR = 'article, shreddit-post, shreddit-ad-post, faceplate-partial';
+
     let columns = COLUMNS;
     let cleanup = false;
 
     let parent = null;
     let currentPath = location.pathname;
 
-    const cardIcon = () => document?.querySelector('shreddit-sort-dropdown[header-text="View"]')?.shadowRoot?.querySelector('svg');
+    const cardIcon = () => {
+        // Try multiple selectors – Reddit has changed the view-switcher element
+        // name/attributes over time.
+        const selectors = [
+            'shreddit-sort-dropdown[header-text="View"]',
+            'shreddit-view-nav',
+            'shreddit-sort-dropdown',
+        ];
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (!el) continue;
+            // If the component uses Shadow DOM, look inside it.
+            const root = el.shadowRoot || el;
+            const svg = root.querySelector('svg');
+            if (svg) return svg;
+        }
+        return undefined;
+    };
     const shouldClean = (icon) => icon === undefined ? false : icon.getAttribute('icon-name') !== "view-card-outline";
 
     let postMap = new Map();
+    let nextSyntheticId = 0;
 
     const indexOfSmallest = function (a) {
         let lowest = 0;
@@ -42,6 +67,29 @@
             if (a[i] < (a[lowest] - 1)) lowest = i;
         }
         return lowest;
+    };
+
+    // --- Stable key for each feed item ------------------------------------
+    // Reddit may or may not provide an aria-label, data-testid, or id on
+    // articles. We try several attributes and fall back to a synthetic id
+    // stamped on the element so that every item always gets a layout key.
+    const stableKey = function(el) {
+        if (el.dataset.rmcId) return el.dataset.rmcId;
+        const candidate =
+            el.getAttribute('aria-label') ||
+            el.getAttribute('id') ||
+            el.getAttribute('data-testid') ||
+            el.getAttribute('data-fullname') ||
+            el.getAttribute('data-post-id') ||
+            el.querySelector('[data-post-id]')?.getAttribute('data-post-id') ||
+            el.querySelector('a[href*="/comments/"]')?.getAttribute('href');
+        if (candidate) {
+            el.dataset.rmcId = candidate;
+            return candidate;
+        }
+        const synth = `rmc-synth-${nextSyntheticId++}`;
+        el.dataset.rmcId = synth;
+        return synth;
     };
 
     // Reddit's <main> and the subgrid wrapper apply horizontal padding that
@@ -70,15 +118,16 @@
                 box-sizing: border-box !important;
                 display: block !important;
             }
-            shreddit-feed article,
-            shreddit-feed shreddit-ad-post,
-            shreddit-feed faceplate-partial {
+            shreddit-feed > article,
+            shreddit-feed > shreddit-post,
+            shreddit-feed > shreddit-ad-post,
+            shreddit-feed > faceplate-partial,
+            shreddit-feed > faceplate-batch > article,
+            shreddit-feed > faceplate-batch > shreddit-post,
+            shreddit-feed > faceplate-batch > shreddit-ad-post,
+            shreddit-feed > faceplate-batch > faceplate-partial {
                 margin: 0 !important;
                 box-sizing: border-box !important;
-                /* Tell Safari each card is an isolated paint surface. Helps
-                   it re-rasterize only the tiles that actually changed after
-                   a visual zoom (Smart Zoom) instead of repainting the whole
-                   tall feed region. */
                 contain: layout paint !important;
             }
             custom-feed-header {
@@ -87,7 +136,7 @@
                 margin-right: 25px !important;
             }
         `;
-        document.head.appendChild(style);
+        (document.head || document.documentElement).appendChild(style);
     };
 
     // --- Visibility management ---------------------------------------------
@@ -136,6 +185,19 @@
 
     // --- Layout ------------------------------------------------------------
 
+    // Strip width-constraining utility classes that Reddit may apply to any
+    // ancestor of the feed. Instead of targeting one exact class name, we
+    // remove anything that looks like a Tailwind fixed/max-width utility
+    // (e.g. "m:w-[1120px]", "lg:max-w-[960px]"), which is more resilient to
+    // Reddit changing the breakpoint values.
+    const stripWidthConstraints = function(el) {
+        if (!el) return;
+        const toRemove = [...el.classList].filter(
+            c => /(^|:)(w-\[|max-w-\[)/.test(c)
+        );
+        if (toRemove.length) el.classList.remove(...toRemove);
+    };
+
     const makeLayout = function(changes = []) {
         if (cleanup) return;
         if (!parent || !parent.isConnected) return;
@@ -148,7 +210,11 @@
                 mainContainer.className = [...mainContainer.classList].filter(c => !c.includes(":grid-cols-")).join(" ");
             }
             const subgrid = document.querySelector("div.subgrid-container");
-            if (subgrid) subgrid.classList.remove("m:w-[1120px]");
+            stripWidthConstraints(subgrid);
+            if (subgrid) {
+                subgrid.style.maxWidth = "100%";
+                subgrid.style.width = "100%";
+            }
             const sidebar = document.getElementById("right-sidebar-container");
             if (sidebar) sidebar.style.display = "none";
             parent.style.position = "relative";
@@ -161,11 +227,27 @@
         const totalHGapPx = HGAP * (columns + 1);
         const colWidthPx = (containerWidth - totalHGapPx) / columns;
 
-        const nodes = [...parent.querySelectorAll("article, shreddit-ad-post, faceplate-partial").values()];
+        const nodes = [...parent.querySelectorAll(FEED_ITEM_SELECTOR)];
 
-        for (const article of nodes) {
-            const key = article.ariaLabel;
-            if (key === null) continue;
+        // Filter to only direct layout items (skip deeply nested elements
+        // that happen to match the selector inside a shadow DOM etc.)
+        const layoutNodes = nodes.filter(n => {
+            let p = n.parentNode;
+            // Accept items whose parent is the feed container or a
+            // faceplate-batch directly inside it.
+            while (p && p !== parent) {
+                const tag = p.tagName ? p.tagName.toLowerCase() : '';
+                if (tag === 'faceplate-batch') {
+                    p = p.parentNode;
+                    continue;
+                }
+                break;
+            }
+            return p === parent;
+        });
+
+        for (const article of layoutNodes) {
+            const key = stableKey(article);
 
             observeArticleSize(article);
 
@@ -190,15 +272,10 @@
             parent.style.height = height + "px";
         }
 
-        for (const article of nodes) {
-            const key = article.ariaLabel;
+        for (const article of layoutNodes) {
+            const key = stableKey(article);
             const entry = postMap.get(key) ?? { col: 0, top: tops[0] };
             const leftPx = HGAP + entry.col * (colWidthPx + HGAP);
-            // Skip the setAttribute when the resolved layout for this article
-            // hasn't moved. setAttribute("style", …) always invalidates style
-            // even with an identical value, and re-running over hundreds of
-            // articles mid-animation (e.g. Safari Smart Zoom snapping back to
-            // 100%) is what causes the cutoff/flash on the way out.
             const layoutKey = cleanup ? '' : `${colWidthPx.toFixed(2)}|${entry.top}|${leftPx.toFixed(2)}`;
             if (article.dataset.rmcKey === layoutKey) continue;
             article.dataset.rmcKey = layoutKey;
@@ -210,9 +287,9 @@
             );
         }
 
-        for (const batch of parent.querySelectorAll("faceplate-batch").values()) {
+        for (const batch of parent.querySelectorAll("faceplate-batch")) {
             if (!batch.style.height) {
-                batch.style.height = [...batch.childNodes].reduce((h, c) => h + c.clientHeight, 0) + "px";
+                batch.style.height = [...batch.childNodes].reduce((h, c) => h + (c.clientHeight || 0), 0) + "px";
             }
         }
     };
@@ -220,14 +297,9 @@
     // Safari Smart Zoom (double-tap on a Magic Trackpad) is a visual-viewport
     // zoom — visualViewport.scale and window.innerWidth change, but the layout
     // viewport (parent.clientWidth in CSS pixels) does not, so there's nothing
-    // for us to lay out differently. The trigger that does reach us is
-    // scrollend, which fires several times during the zoom because Safari pans
-    // the document while zooming. Running makeLayout mid-gesture is what
-    // produces the cutoff/flash on the way back out. Gating on vv.scale skips
-    // those scrollend-driven layouts during the gesture; window resize and
-    // ⌘+/⌘− leave vv.scale at 1, so they still flow through.
+    // for us to lay out differently.
     const vv = window.visualViewport;
-    const isVvZoomedIn = () => vv ? Math.abs(vv.scale - 1) > 0.01 : false;
+    const isVvZoomedIn = () => vv ? vv.scale > 1.01 : false;
 
     let layoutScheduled = false;
     function requestLayout() {
@@ -260,9 +332,46 @@
         layoutSwitch.disconnect();
     };
 
+    // --- Feed container discovery ------------------------------------------
+    // Use a ranked list of strategies so that when Reddit changes its DOM we
+    // still find the feed.  Each strategy returns the container element or
+    // null.  The first non-null result wins.
+    const findParentStrategies = [
+        // Strategy 1: <shreddit-feed> custom element (current Reddit 2025+).
+        () => document.querySelector('shreddit-feed'),
+
+        // Strategy 2: legacy selector – an <article> followed by <hr> then
+        // <faceplate-partial> (pre-2025 Reddit).  Return its parentNode.
+        () => {
+            const anchor = document.querySelector('article + hr + faceplate-partial');
+            return anchor ? anchor.parentNode : null;
+        },
+
+        // Strategy 3: any container that holds multiple <article> children
+        // (generic heuristic).  Walk up from the first article's parent and
+        // pick the first ancestor that holds ≥2 articles.
+        () => {
+            const first = document.querySelector('main article');
+            if (!first) return null;
+            let el = first.parentNode;
+            while (el && el !== document.body) {
+                if (el.querySelectorAll(':scope > article, :scope > shreddit-post').length >= 2) return el;
+                // Also check one level deeper (faceplate-batch wrappers).
+                if (el.querySelectorAll('article, shreddit-post').length >= 2) return el;
+                el = el.parentNode;
+            }
+            return null;
+        },
+    ];
+
     const findParent = function() {
-        const anchor = document.querySelector("article + hr + faceplate-partial");
-        return anchor ? anchor.parentNode : null;
+        for (const strategy of findParentStrategies) {
+            try {
+                const result = strategy();
+                if (result) return result;
+            } catch (_) { /* strategy failed, try next */ }
+        }
+        return null;
     };
 
     let searchDeadline = 0;
@@ -275,11 +384,12 @@
             parent.style.position = "";
             parent.style.height = "";
             postMap = new Map();
+            nextSyntheticId = 0;
             resizeObserver.disconnect();
             disconnectPageObservers();
 
             hideFeed();
-            pageChange.observe(parent, { childList: true });
+            pageChange.observe(parent, { childList: true, subtree: true });
 
             const icon = cardIcon();
             if (icon) {
@@ -294,6 +404,7 @@
 
         if (found && found === parent) {
             postMap = new Map();
+            nextSyntheticId = 0;
             resizeObserver.disconnect();
             parent.style.position = "";
             parent.style.height = "";
@@ -380,7 +491,9 @@
 
     if (document.body) {
         start();
+    } else if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', start, { once: true });
     } else {
-        window.addEventListener('DOMContentLoaded', start, { once: true });
+        start();
     }
 })();
