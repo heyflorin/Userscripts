@@ -193,7 +193,7 @@
     const stripWidthConstraints = function(el) {
         if (!el) return;
         const toRemove = [...el.classList].filter(
-            c => /\b(w-\[|max-w-\[)/.test(c)
+            c => /(^|:)(w-\[|max-w-\[)/.test(c)
         );
         if (toRemove.length) el.classList.remove(...toRemove);
     };
