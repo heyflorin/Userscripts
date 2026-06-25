@@ -122,12 +122,8 @@
 
     // --- Per-article size tracking -----------------------------------------
     let inLayout = false;
-    let layoutCooldown = 0; // timestamp until which observer-triggered layouts are suppressed
-    const LAYOUT_COOLDOWN_MS = 200;
-
     const resizeObserver = new ResizeObserver(() => {
         if (inLayout) return;
-        if (performance.now() < layoutCooldown) return;
         requestLayout();
     });
     const observedArticles = new WeakSet();
@@ -263,7 +259,6 @@
 
         } finally {
             inLayout = false;
-            layoutCooldown = performance.now() + LAYOUT_COOLDOWN_MS;
         }
     };
 
@@ -271,18 +266,12 @@
     const isVvZoomedIn = () => vv ? vv.scale > 1.01 : false;
 
     let layoutScheduled = false;
-    let lastLayoutTime = 0;
-    const MIN_LAYOUT_INTERVAL = 50; // minimum ms between layouts
-
     function requestLayout() {
         if (isVvZoomedIn()) return;
         if (layoutScheduled) return;
         layoutScheduled = true;
         requestAnimationFrame(() => {
             layoutScheduled = false;
-            const now = performance.now();
-            if (now - lastLayoutTime < MIN_LAYOUT_INTERVAL) return;
-            lastLayoutTime = now;
             makeLayout();
         });
     }
@@ -296,25 +285,12 @@
     };
 
     let pageChangeTimer = null;
-    const pageChange = new MutationObserver((mutations) => {
-        if (inLayout) return;
-        if (performance.now() < layoutCooldown) return;
-
-        // Only react to structural changes (new/removed nodes), not our own
-        // style or attribute modifications on positioned articles.
-        const hasStructuralChange = mutations.some(m => {
-            if (m.type === 'childList') return true;
-            // Ignore attribute changes on elements we've positioned
-            if (m.type === 'attributes' && m.target instanceof Element && m.target.dataset.rmcKey) return false;
-            return true;
-        });
-        if (!hasStructuralChange) return;
-
+    const pageChange = new MutationObserver(() => {
         if (pageChangeTimer) clearTimeout(pageChangeTimer);
         pageChangeTimer = setTimeout(() => {
             pageChangeTimer = null;
             requestLayout();
-        }, 150);
+        }, 100);
     });
     const layoutSwitch = new MutationObserver(setLayout);
 
@@ -369,7 +345,7 @@
             resizeObserver.disconnect();
             disconnectPageObservers();
 
-            pageChange.observe(parent, { childList: true, subtree: true, attributes: false });
+            pageChange.observe(parent, { childList: true, subtree: true });
 
             const icon = cardIcon();
             if (icon) {
