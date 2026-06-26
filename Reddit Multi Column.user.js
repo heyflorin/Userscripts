@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.22
+// @version      0.3.23
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
@@ -12,6 +12,26 @@
 // @updateURL https://update.greasyfork.org/scripts/371490/Reddit%20Multi%20Column.meta.js
 // ==/UserScript==
 /* jshint esversion: 6 */
+
+// --- 0.3.23 ------------------------------------------------------------------
+// Fixes a brief flash on iOS / iPadOS where the multi-column feed collapses to
+// a single stacked column for a moment when you tap a post, before the post
+// page renders.
+//
+// Cause: tapping a post is an SPA navigation to a /comments/ post-detail page.
+// Reddit's content swap is slow on iOS/iPadOS, so the previous (gridded) feed
+// lingers in the DOM. Our re-search found that lingering feed, saw the new path
+// was a post detail (a "mixed" feed), and stood the grid down — which un-grids
+// the still-visible feed into a stacked column right before it's replaced. On
+// desktop the swap is fast enough that the un-gridded frame never shows.
+//
+// Fix: recognise that lingering previous feed (the node we were gridding,
+// re-found while the path is now a /comments/ detail page) and keep it HIDDEN
+// instead of revealing it while it's stood down. There's no feed to display on
+// a post-detail page anyway — the post and comments render elsewhere — so the
+// node simply stays invisible until Reddit removes it (or it's re-gridded and
+// revealed on back-navigation). No stacked frame ever paints.
+// -----------------------------------------------------------------------------
 
 // --- 0.3.22 ------------------------------------------------------------------
 // Fixes the broken left nav on iOS / iPadOS (Home, Popular, News, Explore and
@@ -120,6 +140,17 @@
 
     let parent = null;
     let currentPath = location.pathname;
+
+    // The feed we were gridding right before the most recent navigation. If
+    // Reddit hasn't torn it down by the time we re-search (slow SPA swaps on
+    // iOS/iPadOS), we'll re-find this exact node on the new — post-detail —
+    // page; recognising it lets us keep it hidden instead of un-gridding it
+    // into a visible stacked flash. See the 0.3.23 note above.
+    let priorFeed = null;
+    // True while we're deliberately keeping a stood-down feed hidden (the
+    // lingering-feed-on-post-detail case). Guards revealFeed so a stray
+    // settle/scroll can't flash it back in before Reddit removes it.
+    let suppressed = false;
 
     let postMap = new Map();
     let rmcKeyCounter = 0;
@@ -249,6 +280,10 @@
     };
 
     const revealFeed = function() {
+        // While a feed is suppressed (lingering on a post-detail page) it must
+        // stay hidden until it's removed or re-engaged — never revealed by a
+        // settle timer or scroll-driven relayout.
+        if (suppressed) return;
         if (!parent || !hidden) return;
         hidden = false;
         if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
@@ -321,6 +356,12 @@
         if (!parent) return false;
         return columnCountFor(parent.clientWidth) < MIN_COLUMNS;
     };
+
+    // A post-detail page (the page you land on after tapping a post). There is
+    // no pure-post feed to display here — the post body and comment tree render
+    // outside the feed node — so any feed we still hold on such a page is the
+    // previous feed lingering through Reddit's SPA swap.
+    const isPostDetail = () => /\/comments\//.test(location.pathname);
 
     const isMixedFeed = function() {
         const path = location.pathname;
@@ -403,10 +444,17 @@
         if (!parent || !parent.isConnected) return;
         if (cleanup || isMixedFeed() || isTooNarrow()) {
             standDown();
+            // If this is the previous feed still lingering on a post-detail
+            // page, keep it hidden through the swap rather than letting the
+            // stood-down (stacked) feed paint. standDown() reset opacity to
+            // visible, so re-hide in the same frame — no paint happens between.
+            if (suppressed) hideFeed();
             return;
         }
 
         applyChrome();
+        // We're actually gridding now, so any prior suppression is over.
+        suppressed = false;
         if (parent.style.position !== "relative") parent.style.position = "relative";
 
         const containerWidth = parent.clientWidth;
@@ -606,8 +654,23 @@
         const standdown = isMixedFeed() || isTooNarrow();
         if (standdown) {
             standDown();
-            revealFeed();
+            // The previous gridded feed, re-found while we're now on a
+            // post-detail page, is lingering through Reddit's SPA swap (slow on
+            // iOS/iPadOS). Revealing it would un-grid it into a stacked flash
+            // before the post renders. Keep it hidden instead — there's no feed
+            // to show on a post-detail page; it'll be removed, or re-gridded and
+            // revealed on back-navigation. Any other stood-down feed (a genuine
+            // profile/search mixed feed, or a too-narrow phone layout) is real
+            // content and must be shown.
+            if (found === priorFeed && isPostDetail()) {
+                suppressed = true;
+                hideFeed();
+            } else {
+                suppressed = false;
+                revealFeed();
+            }
         } else {
+            suppressed = false;
             hideFeed();
         }
         requestLayout();
@@ -648,6 +711,11 @@
 
         currentPath = location.pathname;
         if (pathChanged) {
+            // Remember the feed we were gridding. If Reddit hasn't removed it by
+            // the time we re-search the new (post-detail) page, engageFeed will
+            // recognise it as the lingering feed and keep it hidden instead of
+            // flashing it un-gridded. Captured before we drop the reference.
+            priorFeed = (parent && parent.isConnected) ? parent : null;
             parent = null;
             disconnectPageObservers();
         }
