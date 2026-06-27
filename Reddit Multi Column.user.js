@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.24
+// @version      0.3.25
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
@@ -13,28 +13,37 @@
 // ==/UserScript==
 /* jshint esversion: 6 */
 
-// --- 0.3.24 ------------------------------------------------------------------
-// Closes the iOS / iPadOS stacked-column flash that 0.3.23 still let through
-// "sometimes" when tapping a post.
+// --- 0.3.25 ------------------------------------------------------------------
+// Reworks the iOS / iPadOS stacked-flash fix. (Reverts the abandoned 0.3.24,
+// which marked each gridded feed with a durable flag and suppressed on that:
+// the flag was never cleared, so when Reddit REUSED a feed DOM node for a later
+// page the script kept the reused node hidden — blanking content and leaving
+// only the left rail. And it still flashed, because it only ever hid the
+// PREVIOUS feed, never a freshly-rendered one.)
 //
-// Cause: 0.3.23 recognised the lingering previous feed by reference equality
-// (found === priorFeed). But Reddit's router navigates to a post with a
-// pushState IMMEDIATELY followed by a replaceState to the canonical permalink
-// (the URL with the title slug) — two path changes in the same task. onNavigate
-// nulls `parent` on the first, so the second captures priorFeed = null. The
-// re-search then re-finds the still-visible gridded feed, (found === priorFeed)
-// is false, and the grid is stood down WHILE VISIBLE — the stacked flash. The
-// fast desktop swap hides this; the slow iOS/iPadOS swap leaves the un-gridded
-// feed on screen. (Reproduced deterministically in a headless browser harness:
-// single-nav was clean, the push→replace double-nav flashed every original card
-// at full opacity until Reddit removed the feed.)
+// New approach — a declarative "navigation veil" instead of per-node bookkeeping:
 //
-// Fix: mark every feed we grid with a durable flag (__rmcGridded) and decide
-// suppression from that flag instead of the fragile priorFeed reference. A
-// gridded node re-found on a post-detail page is, by definition, the previous
-// feed lingering through the swap, so it stays hidden no matter how priorFeed
-// was lost. priorFeed is kept only as a secondary signal. No stacked frame ever
-// paints, on single- or double-navigation.
+// 1. THE VEIL. A class (rmc-veil) is added to <html> SYNCHRONOUSLY the instant a
+//    wide-screen SPA navigation begins (in onNavigate, which runs from the
+//    patched pushState/replaceState/popstate). While it's set, a single CSS rule
+//    hides EVERY <shreddit-feed> (opacity only — IntersectionObserver lazy
+//    loading still runs). That covers both the lingering previous feed AND any
+//    feed Reddit renders fresh on the new page (the back-navigation flash that
+//    per-node hiding could never catch, since the node doesn't exist yet). It's
+//    lifted on the first real reveal, and unconditionally after MAX_HIDE_MS, so a
+//    feed can never get stuck invisible. Gated on viewport width, so phones /
+//    portrait tablets — where we stay fully native — are never veiled.
+//
+// 2. PRIOR-FEED MEMORY ACROSS A push→replace PAIR. Reddit opens a post with a
+//    pushState immediately followed by a replaceState to the canonical permalink
+//    — two path changes in one task. The first nulls `parent`; the old code then
+//    overwrote priorFeed with null on the second, so it forgot which feed it was
+//    gridding and revealed it un-gridded. priorFeed is now only refreshed when a
+//    feed is actually held, so it survives the pair and the post-detail feed
+//    stays correctly suppressed (hidden) past the veil.
+//
+// No durable per-node state, no extra chrome rewriting (so the left rail is left
+// alone), and the veil is width-gated so native mode is untouched.
 // -----------------------------------------------------------------------------
 
 // --- 0.3.23 ------------------------------------------------------------------
@@ -165,12 +174,11 @@
     let parent = null;
     let currentPath = location.pathname;
 
-    // The feed we were gridding right before the most recent navigation, kept as
-    // a SECONDARY signal for recognising a lingering previous feed on the new
-    // page. It can be lost on a pushState→replaceState navigation (the first
-    // change nulls `parent`, so the second captures null here), which is why the
-    // primary signal is now the durable `__rmcGridded` marker set on each feed we
-    // grid — see the 0.3.24 note above and engageFeed.
+    // The feed we were gridding right before the most recent navigation. If
+    // Reddit hasn't torn it down by the time we re-search (slow SPA swaps on
+    // iOS/iPadOS), we'll re-find this exact node on the new — post-detail —
+    // page; recognising it lets us keep it hidden instead of un-gridding it
+    // into a visible stacked flash. See the 0.3.23 note above.
     let priorFeed = null;
     // True while we're deliberately keeping a stood-down feed hidden (the
     // lingering-feed-on-post-detail case). Guards revealFeed so a stray
@@ -287,6 +295,19 @@
                 margin-left: 25px !important;
                 margin-right: 25px !important;
             }
+            /* The navigation veil. While html carries rmc-veil (added
+               synchronously the instant a wide-screen SPA navigation begins,
+               removed on reveal or after MAX_HIDE_MS), EVERY feed is invisible —
+               the previous one lingering through Reddit's slow iOS/iPadOS swap as
+               well as any freshly-rendered one (e.g. on back-navigation). That
+               closes the window in which an un-gridded / native-stacked feed
+               could paint before the grid is (re)applied. It is opacity only, so
+               IntersectionObserver lazy-loading still runs; !important so it wins
+               over the inline opacity the grid manages. NOT scoped to rmc-grid:
+               the destination feed isn't gridded yet when we navigate to it. */
+            html.rmc-veil shreddit-feed {
+                opacity: 0 !important;
+            }
         `;
         (document.head || document.documentElement).appendChild(style);
     };
@@ -295,6 +316,22 @@
     let settleTimer = null;
     let hideDeadline = 0;
     let hidden = false;
+
+    // The navigation veil (see the CSS rule and onNavigate). A class on <html>
+    // that hides every feed during a navigation, applied synchronously at the
+    // navigation event so no un-gridded / native-stacked frame can paint while
+    // the async re-search and re-grid catch up. A hard safety timeout guarantees
+    // it is always lifted, so a feed can never get stuck invisible.
+    let veilTimer = null;
+    const showVeil = function() {
+        document.documentElement.classList.add('rmc-veil');
+        if (veilTimer) clearTimeout(veilTimer);
+        veilTimer = setTimeout(hideVeil, MAX_HIDE_MS);
+    };
+    const hideVeil = function() {
+        if (veilTimer) { clearTimeout(veilTimer); veilTimer = null; }
+        document.documentElement.classList.remove('rmc-veil');
+    };
 
     const hideFeed = function() {
         if (!parent) return;
@@ -311,6 +348,11 @@
         if (suppressed) return;
         if (!parent || !hidden) return;
         hidden = false;
+        // Revealing a real feed ends the navigation: lift the veil so the feed
+        // we just gridded (or a genuine native mixed feed) becomes visible. A
+        // suppressed post-detail feed never reaches here, so it stays hidden by
+        // its own inline opacity:0 after the veil's safety timeout lifts.
+        hideVeil();
         if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
         parent.style.transition = `opacity ${FADE_MS}ms ease-out`;
         parent.style.opacity = '1';
@@ -481,15 +523,6 @@
         // We're actually gridding now, so any prior suppression is over.
         suppressed = false;
         if (parent.style.position !== "relative") parent.style.position = "relative";
-        // Durable mark on the node we grid. If this exact node is re-found later
-        // on a post-detail page (the previous feed lingering through Reddit's
-        // slow SPA swap), engageFeed uses this to keep it HIDDEN instead of
-        // un-gridding it into a visible stacked flash — and it survives losing
-        // the `priorFeed` reference (e.g. a pushState→replaceState pair where the
-        // first nav already nulled it). Never cleared: a feed node is only ever a
-        // pure-post feed (re-gridded) or removed by Reddit, so a lingering marked
-        // node on a stand-down page is always a previous grid, never live content.
-        parent.__rmcGridded = true;
 
         const containerWidth = parent.clientWidth;
         const newColumns = columnCountFor(containerWidth);
@@ -687,30 +720,33 @@
         // and laying it out.
         const standdown = isMixedFeed() || isTooNarrow();
         if (standdown) {
-            // Was THIS node one we'd gridded? Read it before standDown() runs —
-            // standDown() doesn't touch the marker, but read first regardless so
-            // the decision can never depend on standDown()'s side effects. The
-            // `priorFeed` reference is kept only as a secondary signal; the
-            // durable `__rmcGridded` marker is what makes this survive Reddit's
-            // pushState→replaceState navigation (two path changes in one task,
-            // the first of which nulls priorFeed — the race that still let a
-            // stacked frame flash through on iOS/iPadOS in 0.3.23).
-            const wasGridded = !!found.__rmcGridded || found === priorFeed;
             standDown();
-            // A node we'd gridded, re-found while we're now on a post-detail
-            // page, is the previous feed lingering through Reddit's SPA swap
-            // (slow on iOS/iPadOS). Revealing it would un-grid it into a stacked
-            // flash before the post renders. Keep it hidden instead — there's no
-            // feed to show on a post-detail page; it'll be removed, or re-gridded
-            // and revealed on back-navigation. Any other stood-down feed (a
-            // genuine profile/search mixed feed we never gridded, or a too-narrow
-            // phone layout) is real content and must be shown.
-            if (wasGridded && isPostDetail()) {
+            // The previous gridded feed, re-found while we're now on a
+            // post-detail page, is lingering through Reddit's SPA swap (slow on
+            // iOS/iPadOS). Revealing it would un-grid it into a stacked flash
+            // before the post renders. Keep it hidden instead — there's no feed
+            // to show on a post-detail page; it'll be removed, or re-gridded and
+            // revealed on back-navigation. Any other stood-down feed (a genuine
+            // profile/search mixed feed, or a too-narrow phone layout) is real
+            // content and must be shown.
+            if (found === priorFeed && isPostDetail()) {
+                // Lingering previous feed on a post-detail page: hold it hidden
+                // (inline opacity:0) and lift the veil so the rest of the page
+                // paints. It stays hidden until Reddit removes it or it's
+                // re-gridded and revealed on back-navigation.
                 suppressed = true;
                 hideFeed();
+                hideVeil();
             } else {
+                // Genuine native content for this page (profile / search mixed
+                // feed, or a too-narrow layout): show it now and lift the veil.
+                // revealFeed on its own won't lift the veil here — the feed was
+                // never hidden via hideFeed so `hidden` is false and revealFeed
+                // early-returns — so lift it explicitly, otherwise the feed stays
+                // invisible behind the veil until its safety timeout.
                 suppressed = false;
                 revealFeed();
+                hideVeil();
             }
         } else {
             suppressed = false;
@@ -754,11 +790,24 @@
 
         currentPath = location.pathname;
         if (pathChanged) {
-            // Remember the feed we were gridding. If Reddit hasn't removed it by
-            // the time we re-search the new (post-detail) page, engageFeed will
-            // recognise it as the lingering feed and keep it hidden instead of
-            // flashing it un-gridded. Captured before we drop the reference.
-            priorFeed = (parent && parent.isConnected) ? parent : null;
+            // Drop the veil the instant navigation begins, on any screen wide
+            // enough that the grid would engage. This hides BOTH the previous
+            // feed lingering through Reddit's slow iOS/iPadOS swap and any
+            // freshly-rendered feed (back-navigation), so neither can paint
+            // un-gridded/stacked before we (re)apply the grid. Gated on viewport
+            // width so phones / portrait tablets — where we stay native — never
+            // get a feed hidden out from under them. Uses window.innerWidth, not
+            // the current feed's width, because on a post-detail page the content
+            // column is narrow and would wrongly read as "too narrow".
+            if (columnCountFor(window.innerWidth) >= MIN_COLUMNS) showVeil();
+            // Remember the feed we were gridding so engageFeed can recognise it
+            // lingering on the new page and keep it hidden. Only refresh this
+            // when we actually hold a feed: Reddit opens a post with a pushState
+            // immediately followed by a replaceState to the canonical permalink
+            // (two path changes in one task). The first nulls `parent`; if we
+            // overwrote priorFeed with null on the second we'd forget the feed
+            // and reveal it un-gridded. Keep the previous one in that case.
+            if (parent && parent.isConnected) priorFeed = parent;
             parent = null;
             disconnectPageObservers();
         }
