@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.23
+// @version      0.3.24
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
@@ -12,6 +12,30 @@
 // @updateURL https://update.greasyfork.org/scripts/371490/Reddit%20Multi%20Column.meta.js
 // ==/UserScript==
 /* jshint esversion: 6 */
+
+// --- 0.3.24 ------------------------------------------------------------------
+// Closes the iOS / iPadOS stacked-column flash that 0.3.23 still let through
+// "sometimes" when tapping a post.
+//
+// Cause: 0.3.23 recognised the lingering previous feed by reference equality
+// (found === priorFeed). But Reddit's router navigates to a post with a
+// pushState IMMEDIATELY followed by a replaceState to the canonical permalink
+// (the URL with the title slug) — two path changes in the same task. onNavigate
+// nulls `parent` on the first, so the second captures priorFeed = null. The
+// re-search then re-finds the still-visible gridded feed, (found === priorFeed)
+// is false, and the grid is stood down WHILE VISIBLE — the stacked flash. The
+// fast desktop swap hides this; the slow iOS/iPadOS swap leaves the un-gridded
+// feed on screen. (Reproduced deterministically in a headless browser harness:
+// single-nav was clean, the push→replace double-nav flashed every original card
+// at full opacity until Reddit removed the feed.)
+//
+// Fix: mark every feed we grid with a durable flag (__rmcGridded) and decide
+// suppression from that flag instead of the fragile priorFeed reference. A
+// gridded node re-found on a post-detail page is, by definition, the previous
+// feed lingering through the swap, so it stays hidden no matter how priorFeed
+// was lost. priorFeed is kept only as a secondary signal. No stacked frame ever
+// paints, on single- or double-navigation.
+// -----------------------------------------------------------------------------
 
 // --- 0.3.23 ------------------------------------------------------------------
 // Fixes a brief flash on iOS / iPadOS where the multi-column feed collapses to
@@ -141,11 +165,12 @@
     let parent = null;
     let currentPath = location.pathname;
 
-    // The feed we were gridding right before the most recent navigation. If
-    // Reddit hasn't torn it down by the time we re-search (slow SPA swaps on
-    // iOS/iPadOS), we'll re-find this exact node on the new — post-detail —
-    // page; recognising it lets us keep it hidden instead of un-gridding it
-    // into a visible stacked flash. See the 0.3.23 note above.
+    // The feed we were gridding right before the most recent navigation, kept as
+    // a SECONDARY signal for recognising a lingering previous feed on the new
+    // page. It can be lost on a pushState→replaceState navigation (the first
+    // change nulls `parent`, so the second captures null here), which is why the
+    // primary signal is now the durable `__rmcGridded` marker set on each feed we
+    // grid — see the 0.3.24 note above and engageFeed.
     let priorFeed = null;
     // True while we're deliberately keeping a stood-down feed hidden (the
     // lingering-feed-on-post-detail case). Guards revealFeed so a stray
@@ -456,6 +481,15 @@
         // We're actually gridding now, so any prior suppression is over.
         suppressed = false;
         if (parent.style.position !== "relative") parent.style.position = "relative";
+        // Durable mark on the node we grid. If this exact node is re-found later
+        // on a post-detail page (the previous feed lingering through Reddit's
+        // slow SPA swap), engageFeed uses this to keep it HIDDEN instead of
+        // un-gridding it into a visible stacked flash — and it survives losing
+        // the `priorFeed` reference (e.g. a pushState→replaceState pair where the
+        // first nav already nulled it). Never cleared: a feed node is only ever a
+        // pure-post feed (re-gridded) or removed by Reddit, so a lingering marked
+        // node on a stand-down page is always a previous grid, never live content.
+        parent.__rmcGridded = true;
 
         const containerWidth = parent.clientWidth;
         const newColumns = columnCountFor(containerWidth);
@@ -653,16 +687,25 @@
         // and laying it out.
         const standdown = isMixedFeed() || isTooNarrow();
         if (standdown) {
+            // Was THIS node one we'd gridded? Read it before standDown() runs —
+            // standDown() doesn't touch the marker, but read first regardless so
+            // the decision can never depend on standDown()'s side effects. The
+            // `priorFeed` reference is kept only as a secondary signal; the
+            // durable `__rmcGridded` marker is what makes this survive Reddit's
+            // pushState→replaceState navigation (two path changes in one task,
+            // the first of which nulls priorFeed — the race that still let a
+            // stacked frame flash through on iOS/iPadOS in 0.3.23).
+            const wasGridded = !!found.__rmcGridded || found === priorFeed;
             standDown();
-            // The previous gridded feed, re-found while we're now on a
-            // post-detail page, is lingering through Reddit's SPA swap (slow on
-            // iOS/iPadOS). Revealing it would un-grid it into a stacked flash
-            // before the post renders. Keep it hidden instead — there's no feed
-            // to show on a post-detail page; it'll be removed, or re-gridded and
-            // revealed on back-navigation. Any other stood-down feed (a genuine
-            // profile/search mixed feed, or a too-narrow phone layout) is real
-            // content and must be shown.
-            if (found === priorFeed && isPostDetail()) {
+            // A node we'd gridded, re-found while we're now on a post-detail
+            // page, is the previous feed lingering through Reddit's SPA swap
+            // (slow on iOS/iPadOS). Revealing it would un-grid it into a stacked
+            // flash before the post renders. Keep it hidden instead — there's no
+            // feed to show on a post-detail page; it'll be removed, or re-gridded
+            // and revealed on back-navigation. Any other stood-down feed (a
+            // genuine profile/search mixed feed we never gridded, or a too-narrow
+            // phone layout) is real content and must be shown.
+            if (wasGridded && isPostDetail()) {
                 suppressed = true;
                 hideFeed();
             } else {
