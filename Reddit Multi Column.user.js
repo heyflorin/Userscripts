@@ -1,17 +1,48 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.25
+// @version      0.3.26
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
 // @match        https://www.reddit.com/*
 // @match        https://new.reddit.com/*
 // @grant        none
+// @run-at       document-start
 // @downloadURL https://update.greasyfork.org/scripts/371490/Reddit%20Multi%20Column.user.js
 // @updateURL https://update.greasyfork.org/scripts/371490/Reddit%20Multi%20Column.meta.js
 // ==/UserScript==
 /* jshint esversion: 6 */
+
+// --- 0.3.26 ------------------------------------------------------------------
+// Closes the two remaining "old layout paints before the grid" windows on
+// iPad (and any slow device):
+//
+// 1. FRESH LOADS WERE NEVER COVERED. The 0.3.25 veil only went up on SPA
+//    navigations (onNavigate); on a refresh / first load nothing hid the
+//    feed — and the script didn't even run until document-end — so the
+//    native stacked layout was always visible until the grid engaged. The
+//    script now runs at document-start (@run-at) and raises the veil (CSS
+//    rule + <html> class) synchronously before Reddit paints anything,
+//    width-gated exactly like the navigation veil. The history patch and the
+//    feed search also start immediately instead of waiting for the DOM to be
+//    ready, so the grid engages at the earliest possible frame; only the
+//    safety-net observer still waits for <body>.
+//
+// 2. THE VEIL COULD EXPIRE BEFORE REDDIT RENDERED. The veil's only lifetime
+//    was the fixed MAX_HIDE_MS (1.2s) safety timeout, but on iPad Reddit
+//    routinely takes longer than that to render a feed (cold hydration, or
+//    the SPA swap on back-navigation). The veil then lifted while the feed
+//    search was still running, and the freshly-rendered stacked feed painted
+//    until the grid caught up — the "resets to the original layout before
+//    reapplying" flash. The search loop now re-arms the veil timer on every
+//    frame while it is actively hunting — and only if the veil is still up,
+//    so an expired or deliberately-lifted veil is never re-applied — which
+//    makes the safety timeout count from the END of the search rather than
+//    its start. If the search exhausts its budget without finding a feed,
+//    the veil is lifted explicitly, so a feed-less page can never sit
+//    veiled.
+// -----------------------------------------------------------------------------
 
 // --- 0.3.25 ------------------------------------------------------------------
 // Reworks the iOS / iPadOS stacked-flash fix. (Reverts the abandoned 0.3.24,
@@ -765,9 +796,20 @@
         }
 
         if (performance.now() < searchDeadline) {
+            // Keep the veil up while we're still actively hunting for the
+            // feed. Its fixed safety timeout alone is too short for slow iPad
+            // loads/swaps — Reddit can take several seconds to render the
+            // feed, and if the veil expired first the native stacked feed
+            // would paint until the grid engages. Re-arming only while the
+            // class is still present means a veil that already expired (or
+            // was deliberately lifted) is never re-applied.
+            if (document.documentElement.classList.contains('rmc-veil')) showVeil();
             requestAnimationFrame(searchForFeed);
         } else {
             searching = false;
+            // Search exhausted without a feed to grid: never leave the page
+            // veiled (a feed-less page has nothing for engageFeed to reveal).
+            hideVeil();
         }
     };
 
@@ -853,20 +895,32 @@
         }
     });
 
-    const start = function() {
-        injectResetStyles();
-        patchHistory();
-        observeApp();
+    // --- Bootstrap -----------------------------------------------------------
+    // The script runs at document-start (see @run-at) so the veil can beat
+    // Reddit's FIRST paint. Nothing used to hide the feed on a fresh load /
+    // refresh — the veil only covered SPA navigations — so the native stacked
+    // layout was always visible until the grid engaged (very noticeable on
+    // iPad, where hydration is slow). Everything here is safe before <body>
+    // exists: the style element attaches to <head> or <html>, the veil class
+    // goes on <html>, patched history sticks before Reddit's own code captures
+    // it, observeApp retries until <shreddit-app> appears, and the feed search
+    // polls on animation frames (which also keep re-arming the veil, see
+    // searchForFeed). Only the safety-net observer needs a node to watch, so
+    // it alone waits for the DOM.
+    injectResetStyles();
+    if (columnCountFor(window.innerWidth) >= MIN_COLUMNS) showVeil();
+    patchHistory();
+    observeApp();
+    scheduleFeedSearch();
+
+    const attachSafetyNet = function() {
         const main = document.querySelector("main") || document.body;
         domSafetyNet.observe(main, { childList: true, subtree: true });
-        scheduleFeedSearch();
     };
 
     if (document.body) {
-        start();
-    } else if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', start, { once: true });
+        attachSafetyNet();
     } else {
-        start();
+        document.addEventListener('DOMContentLoaded', attachSafetyNet, { once: true });
     }
 })();
