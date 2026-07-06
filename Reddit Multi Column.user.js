@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.27
+// @version      0.3.28
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
@@ -13,6 +13,35 @@
 // @updateURL https://update.greasyfork.org/scripts/371490/Reddit%20Multi%20Column.meta.js
 // ==/UserScript==
 /* jshint esversion: 6 */
+
+// --- 0.3.28 ------------------------------------------------------------------
+// Fixes the persistent gap that appeared between the top of the viewport and
+// Reddit's header on iPad after scrolling all the way back up (or overscrolling
+// to refresh). The header is position:fixed top-0, so no amount of ordinary
+// scrolling can open space above it — the gap is iOS Safari's rubber-band
+// snap-back being ABANDONED: during a top overscroll window.scrollY goes
+// negative and even fixed elements ride along; if the document's layout
+// changes while the snap-back animation is in flight, WebKit can drop the
+// animation and leave the page permanently settled at a negative offset
+// (everything, header included, shifted down) until the next scroll.
+//
+// Scrolling back to the top is exactly when this script produces such layout
+// changes: images near the top finish decoding as they scroll into view,
+// ResizeObserver refreshes card heights, and makeLayout rewrites card
+// positions and the masonry container height — a document-height change in
+// the middle of the bounce.
+//
+// Two defenses:
+//   1. PREVENT: requestLayout/makeLayout never write to the DOM while the
+//      page is over-scrolled past the top (scrollY < 0, checked again at
+//      rAF time); the deferred layout retries every 150ms until the bounce
+//      is over.
+//   2. HEAL: if the offset is left SETTLED negative — no finger down, no
+//      scroll events for 400ms — the snap-back evidently died (whether we
+//      or Reddit's own late DOM work killed it), so it's forced manually
+//      with a 1px scroll jiggle (scrollTo(0,1) then scrollTo(0,0); the
+//      plain scrollTo(0,0) alone doesn't always re-clamp the viewport).
+// -----------------------------------------------------------------------------
 
 // --- 0.3.27 ------------------------------------------------------------------
 // The stacked flash on tapping a post SURVIVED 0.3.26 on iPad. Root cause,
@@ -598,6 +627,10 @@
         // Never lay out — least of all stand down — against a navigation
         // onNavigate hasn't processed.
         if (location.pathname !== currentPath) { onNavigate(); return; }
+        // rAF-time recheck of the overscroll gate in requestLayout: the rubber
+        // band can start between scheduling and this frame, and writing layout
+        // mid-bounce is what strands iOS at a negative scroll offset.
+        if (overscrolledTop()) { scheduleOverscrollRetry(); return; }
         if (!parent || !parent.isConnected) return;
         if (cleanup || isMixedFeed() || isTooNarrow()) {
             // Standing down a feed we were actively gridding (non-empty
@@ -748,6 +781,55 @@
     // some Safari configs report initial scale below 1 and we'd never lay out.
     const isVvZoomedIn = () => vv ? vv.scale > 1.01 : false;
 
+    // --- iOS top-overscroll (rubber band) handling ---------------------------
+    // Reddit's header is position:fixed top-0. On iOS, over-scrolling past the
+    // top (a momentum fling to the top, or pull-to-refresh) rubber-bands the
+    // whole viewport — window.scrollY goes NEGATIVE and even fixed elements
+    // ride along. WebKit's snap-back animation is fragile: if the document's
+    // layout changes while it is in flight, Safari can abandon it, leaving the
+    // page permanently settled at a negative offset — a persistent gap between
+    // the viewport top and the header (and everything else shifted down) until
+    // the user scrolls again. Scrolling back to the top is exactly when our
+    // late work lands: images near the top finish decoding, ResizeObserver
+    // updates card heights, and makeLayout rewrites card positions and the
+    // masonry container height — a document-height change mid-bounce. Two
+    // defenses:
+    //   1. Never perform layout writes while over-scrolled: requestLayout and
+    //      makeLayout defer (with a retry) until the bounce is done.
+    //   2. Self-heal: if the page is left settled at a negative offset with no
+    //      finger down and no scroll activity, force the snap-back Safari
+    //      abandoned with a 1px scroll jiggle (a plain scrollTo(0,0) doesn't
+    //      always re-clamp the visual viewport).
+    const overscrolledTop = () => window.scrollY < 0 || (vv ? vv.pageTop < 0 : false);
+
+    let touchActive = false;
+    let overscrollRetry = null;
+    const scheduleOverscrollRetry = function() {
+        if (overscrollRetry) return;
+        overscrollRetry = setTimeout(() => {
+            overscrollRetry = null;
+            requestLayout();
+        }, 150);
+    };
+
+    let healTimer = null;
+    const scheduleOverscrollHeal = function() {
+        if (healTimer) clearTimeout(healTimer);
+        // Re-armed by every scroll event while negative, so this only fires
+        // once the offset has been SETTLED negative for a while — i.e. the
+        // snap-back is not merely still animating, it's dead.
+        healTimer = setTimeout(() => {
+            healTimer = null;
+            if (touchActive || !overscrolledTop()) return;
+            window.scrollTo(0, 1);
+            requestAnimationFrame(() => window.scrollTo(0, 0));
+        }, 400);
+    };
+    window.addEventListener('touchstart', () => { touchActive = true; }, { passive: true });
+    window.addEventListener('touchend', () => { touchActive = false; scheduleOverscrollHeal(); }, { passive: true });
+    window.addEventListener('touchcancel', () => { touchActive = false; scheduleOverscrollHeal(); }, { passive: true });
+    window.addEventListener('scroll', () => { if (overscrolledTop()) scheduleOverscrollHeal(); }, { passive: true });
+
     let layoutScheduled = false;
     function requestLayout() {
         // Stale-path guard: the URL changed but no navigation signal reached
@@ -757,6 +839,8 @@
         // makeLayout stand the visible grid down against the new path.
         if (location.pathname !== currentPath) { onNavigate(); return; }
         if (isVvZoomedIn()) return;
+        // Mid rubber band: no DOM writes now (see above) — retry shortly.
+        if (overscrolledTop()) { scheduleOverscrollRetry(); return; }
         bumpSettle();
         if (layoutScheduled) return;
         layoutScheduled = true;
