@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.26
+// @version      0.3.27
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
@@ -13,6 +13,59 @@
 // @updateURL https://update.greasyfork.org/scripts/371490/Reddit%20Multi%20Column.meta.js
 // ==/UserScript==
 /* jshint esversion: 6 */
+
+// --- 0.3.27 ------------------------------------------------------------------
+// The stacked flash on tapping a post SURVIVED 0.3.26 on iPad. Root cause,
+// reproduced in a mock-shreddit harness: every fix since 0.3.23 assumed the
+// only way Reddit starts an SPA navigation is by calling history.pushState on
+// the history INSTANCE — the one call our patch intercepts synchronously. It
+// isn't. Two mechanisms bypass it completely:
+//
+//   - History.prototype.pushState.call(history, ...) — dispatching through
+//     the prototype never reads the instance property, so an instance-level
+//     wrapper is invisible to it (some routers do this deliberately to dodge
+//     monkey-patches);
+//   - the Navigation API (navigation.navigate(); Safari 18.4+, so current
+//     iPadOS) — no pushState call happens at all.
+//
+// Either way the URL changes with no event reaching us. The next incidental
+// layout trigger (any feed DOM mutation) runs makeLayout, which reads
+// location.pathname LIVE, sees /comments/, and stands the grid down — with no
+// veil up and no suppression armed, un-gridding the still-visible feed into
+// the stacked flash. The late <shreddit-app> attribute fallback then finally
+// runs onNavigate, hundreds of ms after the paint. In the harness this showed
+// as ~280ms of visible stacked feed for the prototype-call and Navigation-API
+// routes and zero for plain pushState — matching "works in theory, still
+// flashes on the iPad".
+//
+// Fixes, layered so no navigation mechanism is left uncovered:
+//
+// 1. PATCH History.prototype (not the instance), so prototype-dispatched
+//    pushState/replaceState are caught too.
+// 2. LISTEN TO THE NAVIGATION API where present: 'navigate' fires
+//    synchronously at navigation start (before the URL commits) and raises
+//    the veil + remembers the gridded feed; 'currententrychange' fires right
+//    after the URL updates and drives onNavigate, whatever initiated the
+//    navigation.
+// 3. VEIL ON THE TAP ITSELF: a document-level capture-phase click listener
+//    raises the veil for any same-origin, path-changing link activation —
+//    ahead of Reddit's router, whatever it does. (Modified clicks, new-tab
+//    targets and downloads are skipped; a navigation that never happens is
+//    mopped up by the veil's safety timeout.)
+// 4. STALE-PATH GUARD, the structural backstop: requestLayout/makeLayout now
+//    route through onNavigate whenever location.pathname no longer matches
+//    the path we last processed, instead of laying out (and standing down)
+//    against a navigation we never heard about. Even a mechanism none of the
+//    hooks above cover can no longer reach standDown before onNavigate runs.
+// 5. LINGERING-FEED BACKSTOP: standing down a feed we were actively gridding
+//    because the path is now a post-detail page can only mean the previous
+//    feed is lingering through a swap — suppress and hide it uncondition-
+//    ally rather than trusting the priorFeed identity check alone.
+// 6. STARTUP CRASH FIX: at true document-start document.documentElement can
+//    still be null (it is in Chromium userscript engines; WebKit guarantees
+//    it). injectResetStyles/showVeil then threw and the WHOLE script silently
+//    died for the page. Bootstrap now waits for <html> to exist.
+// -----------------------------------------------------------------------------
 
 // --- 0.3.26 ------------------------------------------------------------------
 // Closes the two remaining "old layout paints before the grid" windows on
@@ -539,8 +592,22 @@
     };
 
     const makeLayout = function() {
+        // The path changed under us without a navigation signal (see the
+        // stale-path guard in requestLayout — this is its rAF-time recheck,
+        // since a navigation can commit between scheduling and this frame).
+        // Never lay out — least of all stand down — against a navigation
+        // onNavigate hasn't processed.
+        if (location.pathname !== currentPath) { onNavigate(); return; }
         if (!parent || !parent.isConnected) return;
         if (cleanup || isMixedFeed() || isTooNarrow()) {
+            // Standing down a feed we were actively gridding (non-empty
+            // postMap) because the path is now a post-detail page can only
+            // mean it's the previous feed lingering through the SPA swap —
+            // there is no post feed to show on a post-detail page. Arm
+            // suppression unconditionally, whether or not engageFeed's
+            // priorFeed identity check already did: painting it stacked is
+            // never right.
+            if (!cleanup && postMap.size > 0 && isPostDetail()) suppressed = true;
             standDown();
             // If this is the previous feed still lingering on a post-detail
             // page, keep it hidden through the swap rather than letting the
@@ -683,6 +750,12 @@
 
     let layoutScheduled = false;
     function requestLayout() {
+        // Stale-path guard: the URL changed but no navigation signal reached
+        // us (a router mechanism none of our hooks cover). Whatever DOM churn
+        // triggered this layout IS our navigation notification — route it to
+        // onNavigate, which veils and re-searches, instead of letting
+        // makeLayout stand the visible grid down against the new path.
+        if (location.pathname !== currentPath) { onNavigate(); return; }
         if (isVvZoomedIn()) return;
         bumpSettle();
         if (layoutScheduled) return;
@@ -859,22 +932,86 @@
         scheduleFeedSearch();
     };
 
+    const announceNavigation = function() {
+        window.dispatchEvent(new Event('reddit-mc:locationchange'));
+    };
+
+    // Raise the veil for an imminent same-origin path change and remember the
+    // feed we're gridding — BEFORE anything about the current page is torn
+    // down. Shared by every early navigation signal (the tap itself, the
+    // Navigation API's navigate event). Duplicates the start of onNavigate's
+    // path-changed branch on purpose: these signals fire before the URL
+    // commits, when onNavigate would still see the old path and do nothing.
+    // Idempotent, so firing from several hooks for one navigation is fine.
+    const prepareForNavigation = function(destPathname) {
+        if (destPathname === location.pathname) return;
+        if (columnCountFor(window.innerWidth) >= MIN_COLUMNS) showVeil();
+        if (parent && parent.isConnected) priorFeed = parent;
+    };
+
+    // The tap itself is the earliest navigation signal there is — it precedes
+    // whatever mechanism Reddit's router uses (pushState, prototype dispatch,
+    // Navigation API, anything). Veil on any same-origin link activation whose
+    // path differs from the current one. Modified clicks / non-primary
+    // buttons / new-tab targets / downloads stay in this tab's layout, so
+    // they're skipped; if a veiled click never turns into a navigation, the
+    // veil's safety timeout clears it.
+    const onLinkActivation = function(e) {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        const path = e.composedPath ? e.composedPath() : [];
+        for (const el of path) {
+            if (!el || el.tagName !== 'A') continue;
+            if (!el.href || typeof el.pathname !== 'string') return;
+            if ((el.target && el.target !== '_self') || el.hasAttribute('download')) return;
+            if (el.origin !== location.origin) return;
+            prepareForNavigation(el.pathname);
+            return;
+        }
+    };
+
     const patchHistory = function() {
-        const origPush = history.pushState;
-        const origReplace = history.replaceState;
-        history.pushState = function() {
-            const ret = origPush.apply(this, arguments);
-            window.dispatchEvent(new Event('reddit-mc:locationchange'));
-            return ret;
-        };
-        history.replaceState = function() {
-            const ret = origReplace.apply(this, arguments);
-            window.dispatchEvent(new Event('reddit-mc:locationchange'));
-            return ret;
-        };
-        window.addEventListener('popstate', () => {
-            window.dispatchEvent(new Event('reddit-mc:locationchange'));
-        });
+        // Patch the PROTOTYPE, not the history instance. Reddit's router can
+        // dispatch History.prototype.pushState.call(history, ...) — which
+        // never reads the instance property, so an instance-level wrapper
+        // (what every version up to 0.3.26 installed) sees nothing. The
+        // prototype wrapper catches both plain history.pushState(...) calls
+        // (property lookup falls through to the prototype) and explicit
+        // prototype dispatch.
+        const proto = window.History && History.prototype;
+        if (proto && proto.pushState) {
+            const origPush = proto.pushState;
+            const origReplace = proto.replaceState;
+            proto.pushState = function() {
+                const ret = origPush.apply(this, arguments);
+                announceNavigation();
+                return ret;
+            };
+            proto.replaceState = function() {
+                const ret = origReplace.apply(this, arguments);
+                announceNavigation();
+                return ret;
+            };
+        }
+        window.addEventListener('popstate', announceNavigation);
+
+        // The Navigation API (Safari 18.4+, so current iPadOS; Chrome). A
+        // router driving its SPA through navigation.navigate() never calls
+        // pushState at all. 'navigate' fires synchronously at navigation
+        // start — before the URL even commits — the earliest programmatic
+        // veil point; 'currententrychange' fires right after the URL updates,
+        // for every same-document navigation however it was initiated (it
+        // also double-fires alongside the pushState wrappers, which is
+        // harmless: onNavigate no-ops when the path hasn't changed).
+        if (window.navigation && typeof window.navigation.addEventListener === 'function') {
+            window.navigation.addEventListener('navigate', (e) => {
+                try {
+                    const dest = new URL(e.destination.url);
+                    if (dest.origin === location.origin) prepareForNavigation(dest.pathname);
+                } catch (err) { /* opaque or unparsable destination — not a page of ours */ }
+            });
+            window.navigation.addEventListener('currententrychange', announceNavigation);
+        }
+
         window.addEventListener('reddit-mc:locationchange', onNavigate);
     };
 
@@ -907,20 +1044,34 @@
     // polls on animation frames (which also keep re-arming the veil, see
     // searchForFeed). Only the safety-net observer needs a node to watch, so
     // it alone waits for the DOM.
-    injectResetStyles();
-    if (columnCountFor(window.innerWidth) >= MIN_COLUMNS) showVeil();
-    patchHistory();
-    observeApp();
-    scheduleFeedSearch();
-
     const attachSafetyNet = function() {
         const main = document.querySelector("main") || document.body;
         domSafetyNet.observe(main, { childList: true, subtree: true });
     };
 
-    if (document.body) {
-        attachSafetyNet();
+    const boot = function() {
+        injectResetStyles();
+        if (columnCountFor(window.innerWidth) >= MIN_COLUMNS) showVeil();
+        patchHistory();
+        document.addEventListener('click', onLinkActivation, true);
+        observeApp();
+        scheduleFeedSearch();
+        if (document.body) attachSafetyNet();
+        else document.addEventListener('DOMContentLoaded', attachSafetyNet, { once: true });
+    };
+
+    // At true document-start document.documentElement can still be null (it
+    // is in Chromium userscript engines; WebKit guarantees <html> exists).
+    // injectResetStyles/showVeil would then throw on it — killing the ENTIRE
+    // script for the page — so when the root element isn't there yet, wait
+    // for it.
+    if (document.documentElement) {
+        boot();
     } else {
-        document.addEventListener('DOMContentLoaded', attachSafetyNet, { once: true });
+        new MutationObserver(function(_, observer) {
+            if (!document.documentElement) return;
+            observer.disconnect();
+            boot();
+        }).observe(document, { childList: true });
     }
 })();
