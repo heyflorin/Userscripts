@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.28
+// @version      0.3.29
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
@@ -13,6 +13,33 @@
 // @updateURL https://update.greasyfork.org/scripts/371490/Reddit%20Multi%20Column.meta.js
 // ==/UserScript==
 /* jshint esversion: 6 */
+
+// --- 0.3.29 ------------------------------------------------------------------
+// Reddit redesigned its page grid and the script silently stood down on every
+// page, on every screen size — "not working" with no error. Two independent
+// breaks, found by running the script against the live hydrated site:
+//
+// 1. THE TOO-NARROW CHECK MEASURED THE WRONG WIDTH. Reddit's main-container
+//    now caps the content column at 756px (grid-cols-[minmax(0,756px)_...]),
+//    so the feed's NATIVE clientWidth is ~732px even on a 1600px-wide screen.
+//    isTooNarrow() measured that native width, computed a single column, and
+//    permanently stood down — but the whole point of applyChrome is to widen
+//    <main> to 100% before the grid lays out, so the decision must be based
+//    on the width the feed WOULD have after the chrome rewrite. isTooNarrow
+//    now measures the engaged feed when the grid is up, and otherwise the
+//    main-container (which spans content + right sidebar — exactly the space
+//    applyChrome unlocks), falling back to window.innerWidth. On phones /
+//    portrait tablets the container is genuinely narrow, so the mobile
+//    stand-down behavior is unchanged.
+//
+// 2. REDDIT RENAMED ITS VIEW-SWITCHER ICONS. The card/compact detector
+//    compared the View dropdown's icon-name against "view-card-outline";
+//    the icon set was renamed and card view is now "card" (selected state
+//    "card-fill", compact is "classic"). The old comparison read card view
+//    as "not card" — one attribute flicker on that icon and cleanup mode
+//    stood the grid down for good. The check now accepts any icon-name
+//    containing "card", old names and new.
+// -----------------------------------------------------------------------------
 
 // --- 0.3.28 ------------------------------------------------------------------
 // Fixes the persistent gap that appeared between the top of the viewport and
@@ -303,7 +330,11 @@
     let lastColWidth = 0;
 
     const cardIcon = () => document?.querySelector('shreddit-sort-dropdown[header-text="View"]')?.shadowRoot?.querySelector('svg');
-    const shouldClean = (icon) => icon === undefined ? false : icon.getAttribute('icon-name') !== "view-card-outline";
+    // Card view means masonry stays on; anything else (compact/classic) means
+    // clean up. Reddit renamed these icons ("view-card-outline" became "card",
+    // selected state "card-fill", compact became "classic"), so match any
+    // card-flavored name, old or new, instead of one exact string.
+    const shouldClean = (icon) => icon == null ? false : !/card/.test(icon.getAttribute('icon-name') || "");
 
     // Per-post identity. This MUST be stable for an element's entire lifetime —
     // if a post's key changes between layouts, its column entry is dropped and
@@ -529,12 +560,28 @@
         return Math.max(1, Math.floor((containerWidth - GAP) / (MIN_WIDTH + GAP)));
     };
 
+    // The width the grid would actually get. Once engaged, that's the feed
+    // itself (applyChrome has already widened <main> to 100%). Before engaging
+    // it must NOT be the feed's native clientWidth: Reddit's main-container
+    // caps the content column at ~756px, so the native feed measures a single
+    // column wide on ANY screen and the script would never engage. Measure the
+    // main-container instead — it spans content plus right sidebar, which is
+    // exactly the space applyChrome unlocks — with the viewport as fallback.
+    const gridWidth = function() {
+        if (document.documentElement.classList.contains('rmc-grid') && parent) {
+            return parent.clientWidth;
+        }
+        const container = document.querySelector("div.main-container");
+        if (container) return container.clientWidth;
+        return window.innerWidth;
+    };
+
     // True on phones / portrait tablets, where only a single column fits. There
     // the grid is pointless and its chrome changes interfere with Reddit's
     // mobile layout, so we leave the page native.
     const isTooNarrow = function() {
         if (!parent) return false;
-        return columnCountFor(parent.clientWidth) < MIN_COLUMNS;
+        return columnCountFor(gridWidth()) < MIN_COLUMNS;
     };
 
     // A post-detail page (the page you land on after tapping a post). There is
