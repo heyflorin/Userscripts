@@ -1466,7 +1466,9 @@
         if (document.hidden) return;
         if (location.pathname !== currentPath) { onNavigate(); return; }
         if (!parent || !parent.isConnected) {
-            if (!searching) scheduleFeedSearch(2000);
+            // Only when there is a feed to find: on feed-less pages (a post)
+            // re-searching would keep the navigation veil re-armed forever.
+            if (!searching && findParent()) scheduleFeedSearch(2000);
             return;
         }
         // A newer feed has appeared (Reddit swapped it without our observers
