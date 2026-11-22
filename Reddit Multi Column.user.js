@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Multi Column
 // @namespace    https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
-// @version      0.3.29
+// @version      0.3.30
 // @description  Multi column layout for reddit redesign (with SPA nav support)
 // @author       Can Altıparmak
 // @homepageURL  https://gist.github.com/c6p/463892bb243f611f2a3cfa4268c6435e
@@ -13,6 +13,59 @@
 // @updateURL https://update.greasyfork.org/scripts/371490/Reddit%20Multi%20Column.meta.js
 // ==/UserScript==
 /* jshint esversion: 6 */
+
+// --- 0.3.30 ------------------------------------------------------------------
+// Fixes "the grid only appears once I scroll", "holes open up in the columns
+// and never fill back in", and the need to refresh to get a working layout.
+// All three were reproduced by driving the live site in a headless browser
+// with this script injected at document-start.
+//
+// 1. REDDIT NOW VIRTUALIZES THE FEED. Posts (and whole <faceplate-batch>es
+//    of ~25 posts) that scroll far away are swapped for empty
+//    <div class="virtualized-placeholder"> spacers, and swapped back when
+//    the spacer scrolls into view. Reddit decides both from each element's
+//    on-screen BOX — but in the grid, cards are absolutely positioned while
+//    batches and spacers stayed in normal flow, stacked one column high, so
+//    their boxes had nothing to do with where the cards were drawn. Reddit
+//    then removed batches whose cards were on screen (holes) and never
+//    restored spacers that sat thousands of px below their cards (holes that
+//    "don't get re-arranged when I scroll"). Now:
+//      - every batch is positioned to cover exactly the vertical span of its
+//        cards (cards inside are positioned relative to it), and
+//      - each spacer is paired with the cards it replaced (from the mutation
+//        record of the swap) and placed over their slot/span,
+//    so Reddit's virtualizer sees the real geometry and swaps at the right
+//    moments, and a remounted card reclaims its reserved slot.
+//
+// 2. NO MORE PHANTOM SCROLL SPACE. Each batch used to get a fixed height
+//    equal to its cards stacked in ONE column (~15000px per batch), leaving
+//    ~2/3 of the document as blank space below the grid. Removed — batch
+//    boxes are now the real grid span.
+//
+// 3. TRULY REMOVED POSTS NO LONGER LEAVE A HOLE. Reddit de-duplicates /
+//    removes some server-rendered posts and ads after hydration. Their
+//    slots were kept forever ("never prune", from 0.3.20 — which was meant
+//    for virtualization, now handled properly by #1). A slot whose post has
+//    neither a live node nor a spacer for ORPHAN_GRACE_MS is now released
+//    and the column closes up. Duplicate nodes sharing one key (Reddit
+//    renders some ads twice) get their own keys instead of being stacked on
+//    the same spot, and zero-height cards no longer eat a GAP.
+//
+// 4. THE GRID NO LONGER WAITS FOR A SCROLL. Layout was only re-run by direct
+//    children of the feed changing, window resize, scrollend and card
+//    resizes. Posts arriving inside nested containers (batches, partials),
+//    the content column settling to its final width after we'd already
+//    stood down as "too narrow", the feed being swapped on hydration while
+//    the safety-net watched a stale <main>, a tab restored from the
+//    back/forward cache, or Safari versions without scrollend all left the
+//    layout stale until the user scrolled. Now: nested containers are
+//    observed, the feed and its main-container are size-observed, the
+//    safety net watches <body>, pageshow/visibilitychange re-run layout, a
+//    debounced scroll handler stands in where scrollend is missing, and a
+//    1s watchdog (only while the tab is visible) re-engages a lost feed,
+//    lays out any unpositioned card, reveals a feed left hidden and picks up
+//    a late-mounting View (card/compact) icon.
+// -----------------------------------------------------------------------------
 
 // --- 0.3.29 ------------------------------------------------------------------
 // Reddit redesigned its page grid and the script silently stood down on every
@@ -308,6 +361,16 @@
     const MAX_HIDE_MS = 1200;
     const FADE_MS = 150;
 
+    // How long a post may be missing from the feed — no live node and no
+    // virtualization spacer standing in for it — before its reserved slot is
+    // released and its column closes up. Covers Reddit briefly detaching a
+    // node while it re-renders it.
+    const ORPHAN_GRACE_MS = 800;
+
+    // Reddit's feed virtualization spacer (see the 0.3.30 note).
+    const PLACEHOLDER_CLASS = 'virtualized-placeholder';
+    const isPlaceholder = (n) => !!(n && n.classList && n.classList.contains(PLACEHOLDER_CLASS));
+
     let columns = 0;
     let cleanup = false;
 
@@ -334,7 +397,12 @@
     // clean up. Reddit renamed these icons ("view-card-outline" became "card",
     // selected state "card-fill", compact became "classic"), so match any
     // card-flavored name, old or new, instead of one exact string.
-    const shouldClean = (icon) => icon == null ? false : !/card/.test(icon.getAttribute('icon-name') || "");
+    // A missing/empty icon-name (the icon is still hydrating) is "unknown",
+    // not "compact" — reading it as compact stood the grid down on load.
+    const shouldClean = function(icon) {
+        const name = icon ? (icon.getAttribute('icon-name') || "") : "";
+        return name ? !/card/.test(name) : false;
+    };
 
     // Per-post identity. This MUST be stable for an element's entire lifetime —
     // if a post's key changes between layouts, its column entry is dropped and
@@ -653,6 +721,12 @@
             node.removeAttribute('style');
             delete node.dataset.rmcKey;
         }
+        // Batches and virtualization spacers carry Reddit's own inline style
+        // (a spacer's height is how big the content it stands in for was), so
+        // put back exactly what they had instead of wiping it.
+        for (const node of parent.querySelectorAll('[data-rmc-box]')) {
+            restoreBox(node);
+        }
         parent.style.position = "";
         parent.style.height = "";
         parent.style.opacity = "";
@@ -679,6 +753,7 @@
         // mid-bounce is what strands iOS at a negative scroll offset.
         if (overscrolledTop()) { scheduleOverscrollRetry(); return; }
         if (!parent || !parent.isConnected) return;
+        syncLayoutSwitch();
         if (cleanup || isMixedFeed() || isTooNarrow()) {
             // Standing down a feed we were actively gridding (non-empty
             // postMap) because the path is now a post-detail page can only
@@ -714,37 +789,68 @@
         // One pass to classify the children. Real posts and ads are cards;
         // faceplate-partials are loaders (handled separately); skeleton
         // <article>s without a <shreddit-post> are neither and get ignored.
+        // Virtualization spacers that we paired with the cards they replaced
+        // (see onFeedMutations) are "holders": they keep those cards' slots
+        // reserved and get positioned over them.
         const items = [];
-        for (const node of parent.querySelectorAll("article, shreddit-ad-post, faceplate-partial")) {
+        const holders = [];
+        const cardKeys = new Set();
+        const liveKeys = new Set();
+        for (const node of parent.querySelectorAll(`article, shreddit-ad-post, faceplate-partial, .${PLACEHOLDER_CLASS}`)) {
+            watchContainer(node.parentElement);
+            if (isPlaceholder(node)) {
+                if (node.__rmcKeys && node.__rmcKeys.length) {
+                    holders.push(node);
+                    for (const k of node.__rmcKeys) liveKeys.add(k);
+                }
+                continue;
+            }
             const tag = node.tagName;
             const isPartial = tag === 'FACEPLATE-PARTIAL';
             const isAd = tag === 'SHREDDIT-AD-POST';
             const post = (!isPartial && node.querySelector) ? node.querySelector('shreddit-post') : null;
             const isCard = isAd || (tag === 'ARTICLE' && !!post);
-            items.push({ node, isPartial, isCard, key: isCard ? getPostKey(node, post) : null });
+            let key = isCard ? getPostKey(node, post) : null;
+            if (key && cardKeys.has(key)) {
+                // Two live nodes with one identity (Reddit renders some ads
+                // twice). Sharing a slot would stack them on the same spot,
+                // so the later one gets an identity of its own.
+                key = node.__rmcK = key + '#' + (++rmcKeyCounter);
+            }
+            if (key) { cardKeys.add(key); liveKeys.add(key); }
+            if (isPartial) watchContainer(node);
+            items.push({ node, isPartial, isCard, key });
         }
 
         // Seed new cards / refresh measurements. On scroll, only brand-new cards
         // are measured; existing heights come from cache. On resize (width
         // change) every card is re-measured since its rendered height changes.
-        // We deliberately do NOT prune entries for posts missing this pass: a
-        // post that's momentarily absent (mid re-render) or unmounted by Reddit's
-        // virtualization must keep its reserved slot, otherwise the cards below
-        // it in that column collapse upward — the shift you saw. With stable
-        // cached keys a re-rendered post reclaims its existing entry, so the map
-        // tracks the feed without churn, and it resets on navigation
-        // (searchForFeed), which bounds it per feed.
         const remeasure = columnsChanged || widthChanged;
         for (const it of items) {
             if (!it.isCard) continue;
             observeCard(it.node);
             const existing = postMap.get(it.key);
             if (!existing) {
-                postMap.set(it.key, { height: measureCard(it.node), col: -1, top: 0 });
+                postMap.set(it.key, { height: measureCard(it.node), col: -1, top: 0, missing: 0 });
             } else if (remeasure) {
                 existing.height = measureCard(it.node);
             }
         }
+
+        // Release the slots of posts that are really gone. A post that is
+        // virtualized has a holder and stays reserved (so it comes back in
+        // place); one that is mid re-render gets ORPHAN_GRACE_MS to reappear.
+        // Anything else — Reddit de-duplicating a server-rendered post, an ad
+        // being pulled — used to leave a permanent hole in its column.
+        const now = performance.now();
+        let nextPrune = Infinity;
+        for (const [k, p] of postMap) {
+            if (liveKeys.has(k)) { p.missing = 0; continue; }
+            if (!p.missing) p.missing = now;
+            if (now - p.missing >= ORPHAN_GRACE_MS) postMap.delete(k);
+            else nextPrune = Math.min(nextPrune, p.missing + ORPHAN_GRACE_MS);
+        }
+        if (nextPrune !== Infinity) schedulePrune(nextPrune - now);
 
         // Sticky columns: only (re)assign a column to a card that doesn't have a
         // valid one. A column-count change invalidates all of them (true reflow,
@@ -757,9 +863,43 @@
         for (const p of postMap.values()) {
             if (p.col < 0 || p.col >= columns) p.col = indexOfSmallest(tops);
             p.top = tops[p.col];
-            tops[p.col] += p.height + GAP;
+            // A zero-height card (a collapsed / blocked ad) takes no room —
+            // not even a gap.
+            if (p.height > 0) tops[p.col] += p.height + GAP;
         }
         const gridHeight = tops.length ? Math.max(...tops) : GAP;
+
+        // Frames. A <faceplate-batch> (one page of infinite scroll) is what
+        // Reddit virtualizes as a unit, judging by its box — so its box must
+        // cover where its cards are actually drawn. Each batch is positioned
+        // over the vertical span of its cards, and the cards inside are then
+        // positioned relative to it.
+        const frameOf = function(node) {
+            const b = node.parentElement && node.parentElement.closest('faceplate-batch');
+            return (b && b !== parent && parent.contains(b)) ? b : null;
+        };
+        const spans = new Map();
+        const extend = function(frame, key) {
+            const p = postMap.get(key);
+            if (!p) return;
+            const s = spans.get(frame) || { top: Infinity, bottom: -Infinity };
+            s.top = Math.min(s.top, p.top);
+            s.bottom = Math.max(s.bottom, p.top + p.height);
+            spans.set(frame, s);
+        };
+        for (const it of items) {
+            it.frame = frameOf(it.node);
+            if (it.isCard && it.frame) extend(it.frame, it.key);
+        }
+        for (const h of holders) {
+            h.__rmcFrame = frameOf(h);
+            if (h.__rmcFrame) for (const k of h.__rmcKeys) extend(h.__rmcFrame, k);
+        }
+        for (const [frame, sp] of spans) {
+            sp.bottom = Math.max(sp.bottom, sp.top);
+            placeBox(frame, sp.top, 0, '100%', sp.bottom - sp.top);
+        }
+        const frameTop = (frame) => (frame && spans.has(frame)) ? spans.get(frame).top : 0;
 
         // Position the cards. The layoutKey memo skips setAttribute when a card
         // hasn't moved — so a layout where nothing changed writes nothing, which
@@ -769,13 +909,36 @@
             const p = postMap.get(it.key);
             if (!p) continue;
             const leftPx = GAP + p.col * (colWidthPx + GAP);
-            const layoutKey = `${colWidthPx.toFixed(2)}|${p.top}|${leftPx.toFixed(2)}`;
+            const topPx = p.top - frameTop(it.frame);
+            const layoutKey = `${colWidthPx.toFixed(2)}|${topPx}|${leftPx.toFixed(2)}`;
             if (it.node.dataset.rmcKey === layoutKey) continue;
             it.node.dataset.rmcKey = layoutKey;
             it.node.setAttribute(
                 "style",
-                `position:absolute; width:${colWidthPx}px; top:${p.top}px; left:${leftPx}px; margin:0; padding:0`
+                `position:absolute; width:${colWidthPx}px; top:${topPx}px; left:${leftPx}px; margin:0; padding:0`
             );
+        }
+
+        // Place each virtualization spacer over what it stands in for: a
+        // single card's slot, or the full-width span of a batch. Reddit
+        // restores the content when the spacer scrolls into view, so this is
+        // what makes a card come back exactly where it was.
+        for (const h of holders) {
+            let top = Infinity, bottom = -Infinity, single = null;
+            for (const k of h.__rmcKeys) {
+                const p = postMap.get(k);
+                if (!p) continue;
+                top = Math.min(top, p.top);
+                bottom = Math.max(bottom, p.top + p.height);
+                single = single === null ? p : false;
+            }
+            if (top === Infinity) continue;
+            const ft = frameTop(h.__rmcFrame);
+            if (single) {
+                placeBox(h, top - ft, GAP + single.col * (colWidthPx + GAP), colWidthPx + 'px', bottom - top);
+            } else {
+                placeBox(h, top - ft, 0, '100%', bottom - top);
+            }
         }
 
         // Park loaders below the grid, out of the card flow. A partial that has
@@ -794,24 +957,50 @@
                 continue;
             }
             const lh = node.offsetHeight || 0;
-            const lkey = `loader|${bottom}|${colWidthPx.toFixed(2)}`;
+            const topPx = bottom - frameTop(it.frame);
+            const lkey = `loader|${topPx}|${colWidthPx.toFixed(2)}`;
             if (node.dataset.rmcKey !== lkey) {
                 node.dataset.rmcKey = lkey;
                 node.setAttribute(
                     "style",
-                    `position:absolute; top:${bottom}px; left:${GAP}px; width:${colWidthPx}px; margin:0; padding:0`
+                    `position:absolute; top:${topPx}px; left:${GAP}px; width:${colWidthPx}px; margin:0; padding:0`
                 );
             }
             if (lh) bottom += lh + GAP;
         }
 
-        if (bottom > GAP) parent.style.height = bottom + "px";
+        if (bottom > GAP && parent.style.height !== bottom + "px") parent.style.height = bottom + "px";
+    };
 
-        for (const batch of parent.querySelectorAll("faceplate-batch").values()) {
-            if (!batch.style.height) {
-                batch.style.height = [...batch.childNodes].reduce((h, c) => h + c.clientHeight, 0) + "px";
-            }
-        }
+    // Absolutely position a batch frame or a virtualization spacer, keeping
+    // whatever inline style Reddit gave it so standing down can restore it.
+    const placeBox = function(node, top, left, width, height) {
+        const leftCss = typeof left === 'number' ? left + 'px' : left;
+        const memo = `${top}|${leftCss}|${width}|${height}`;
+        if (node.dataset.rmcBox === memo) return;
+        if (!('rmcBox' in node.dataset)) node.__rmcOrigStyle = node.getAttribute('style');
+        node.dataset.rmcBox = memo;
+        const st = node.style;
+        st.position = 'absolute';
+        st.top = top + 'px';
+        st.left = leftCss;
+        st.width = width;
+        st.height = height + 'px';
+        st.margin = '0';
+    };
+    const restoreBox = function(node) {
+        if (!('rmcBox' in node.dataset)) return;
+        delete node.dataset.rmcBox;
+        const orig = node.__rmcOrigStyle;
+        if (orig == null) node.removeAttribute('style');
+        else node.setAttribute('style', orig);
+        node.__rmcOrigStyle = undefined;
+    };
+
+    let pruneTimer = null;
+    const schedulePrune = function(ms) {
+        if (pruneTimer) return;
+        pruneTimer = setTimeout(() => { pruneTimer = null; requestLayout(); }, Math.max(16, ms + 16));
     };
 
     // Safari Smart Zoom (double-tap on a Magic Trackpad) is a visual-viewport
@@ -886,6 +1075,9 @@
         // makeLayout stand the visible grid down against the new path.
         if (location.pathname !== currentPath) { onNavigate(); return; }
         if (isVvZoomedIn()) return;
+        // The feed we hold was swapped out from under us (hydration re-render,
+        // sort change): find the new one rather than laying out nothing.
+        if (parent && !parent.isConnected) { parent = null; scheduleFeedSearch(2000); return; }
         // Mid rubber band: no DOM writes now (see above) — retry shortly.
         if (overscrolledTop()) { scheduleOverscrollRetry(); return; }
         bumpSettle();
@@ -905,15 +1097,108 @@
         }
     };
 
-    const pageChange = new MutationObserver(requestLayout);
+    // Pair each virtualization spacer with the cards it replaced. Reddit swaps
+    // content and spacer with a single replaceWith, so one mutation record
+    // carries both: the removed node (a card, or a batch of cards) and the
+    // added spacer. The spacer inherits their keys, which keeps their slots
+    // reserved and tells makeLayout where to put it.
+    const keysOf = function(el) {
+        if (el.__rmcK) return [el.__rmcK];
+        if (el.__rmcKeys) return el.__rmcKeys.slice();
+        const out = [];
+        if (!el.querySelectorAll) return out;
+        for (const c of el.querySelectorAll(`article, shreddit-ad-post, .${PLACEHOLDER_CLASS}`)) {
+            if (c.__rmcK) out.push(c.__rmcK);
+            else if (c.__rmcKeys) out.push(...c.__rmcKeys);
+        }
+        return out;
+    };
+    const onFeedMutations = function(records) {
+        for (const m of records) {
+            if (!m.addedNodes.length || !m.removedNodes.length) continue;
+            let keys = null;
+            for (const r of m.removedNodes) {
+                if (r.nodeType !== 1) continue;
+                const k = keysOf(r);
+                if (k.length) keys = keys ? keys.concat(k) : k;
+            }
+            if (!keys) continue;
+            for (const a of m.addedNodes) {
+                if (isPlaceholder(a)) { a.__rmcKeys = keys; break; }
+            }
+        }
+        requestLayout();
+    };
+
+    const pageChange = new MutationObserver(onFeedMutations);
     const layoutSwitch = new MutationObserver(setLayout);
 
+    // Posts don't only arrive as direct children of the feed: infinite scroll
+    // inserts them inside <faceplate-batch>es and partials, and Reddit's
+    // virtualizer swaps cards inside those containers too. Watch every
+    // container a card has lived in, not just the feed itself.
+    let watchedContainers = new WeakSet();
+    const watchContainer = function(node) {
+        if (!node || node === parent || watchedContainers.has(node)) return;
+        watchedContainers.add(node);
+        pageChange.observe(node, { childList: true });
+    };
+
+    // Sync the card/compact switch. The View dropdown's icon lives in a
+    // shadow root that often isn't rendered yet when the feed is found, and
+    // it can be re-rendered later, so (re)attach whenever it changes.
+    let watchedIcon = null;
+    const syncLayoutSwitch = function() {
+        const icon = cardIcon();
+        if (!icon || icon === watchedIcon) return false;
+        watchedIcon = icon;
+        layoutSwitch.disconnect();
+        layoutSwitch.observe(icon, { attributes: true });
+        const c = shouldClean(icon);
+        if (c === cleanup) return false;
+        cleanup = c;
+        return true;
+    };
+
+    // Width changes of the feed or its main-container (the content column
+    // settling during load, the sidebar collapsing, a split-view resize on
+    // iPad) don't always come with a window resize. Height changes are ours
+    // (parent.style.height) and are ignored.
+    const lastWidths = new WeakMap();
+    const frameObserver = new ResizeObserver((entries) => {
+        let changed = false;
+        for (const e of entries) {
+            const w = Math.round(e.contentRect.width);
+            if (lastWidths.get(e.target) !== w) {
+                lastWidths.set(e.target, w);
+                changed = true;
+            }
+        }
+        if (changed) requestLayout();
+    });
+
     window.addEventListener('resize', requestLayout);
-    window.addEventListener('scrollend', requestLayout);
+    if ('onscrollend' in window) {
+        window.addEventListener('scrollend', requestLayout);
+    } else {
+        // No scrollend (older Safari): debounce scroll into the same signal.
+        let scrollIdle = null;
+        window.addEventListener('scroll', () => {
+            if (scrollIdle) clearTimeout(scrollIdle);
+            scrollIdle = setTimeout(() => { scrollIdle = null; requestLayout(); }, 150);
+        }, { passive: true });
+    }
+    // Returning to the tab, or a page restored from the back/forward cache,
+    // can find the layout stale; re-check right away instead of on scroll.
+    window.addEventListener('pageshow', () => { onNavigate(); requestLayout(); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) requestLayout(); });
 
     const disconnectPageObservers = function() {
         pageChange.disconnect();
         layoutSwitch.disconnect();
+        frameObserver.disconnect();
+        watchedContainers = new WeakSet();
+        watchedIcon = null;
     };
 
     // Anchor on the post's actual parent. The old selector
@@ -922,10 +1207,20 @@
     // vanishes. Finding any post inside the feed and using its parentElement is
     // resilient to that, and querySelectorAll on the returned container still
     // collects posts even if they're nested a level deeper.
+    //
+    // When the posts live in a <shreddit-feed>, that element itself is the
+    // container: after Reddit virtualizes the server-rendered posts the first
+    // remaining <article> sits inside a <faceplate-batch>, and anchoring on
+    // its parent would grid only that one batch. The bare-<article> fallback
+    // requires a real post so a stray article elsewhere on the page can't be
+    // mistaken for the feed.
     const findParent = function() {
-        const article = document.querySelector("shreddit-feed article")
-                     || document.querySelector("article");
-        return article ? article.parentElement : null;
+        const feedArticle = document.querySelector("shreddit-feed article");
+        if (feedArticle) return feedArticle.closest("shreddit-feed");
+        for (const a of document.querySelectorAll("article")) {
+            if (a.querySelector("shreddit-post")) return a.parentElement;
+        }
+        return null;
     };
 
     let searchDeadline = 0;
@@ -945,8 +1240,10 @@
         if (isNew) {
             disconnectPageObservers();
             pageChange.observe(parent, { childList: true });
-            const icon = cardIcon();
-            if (icon) layoutSwitch.observe(icon, { attributes: true });
+            syncLayoutSwitch();
+            frameObserver.observe(parent);
+            const container = document.querySelector("div.main-container");
+            if (container) frameObserver.observe(container);
         }
         // Stand down for the same reasons makeLayout does: a mixed feed (grid
         // would overlap comments) or a screen too narrow for the grid to help
@@ -1159,9 +1456,42 @@
 
     const domSafetyNet = new MutationObserver(() => {
         if (!parent || !parent.isConnected) {
-            scheduleFeedSearch(2000);
+            if (!searching) scheduleFeedSearch(2000);
         }
     });
+
+    // Watchdog: a cheap once-a-second check (skipped while the tab is hidden)
+    // for any state that used to need a scroll or a refresh to recover from.
+    const watchdog = function() {
+        if (document.hidden) return;
+        if (location.pathname !== currentPath) { onNavigate(); return; }
+        if (!parent || !parent.isConnected) {
+            // Only when there is a feed to find: on feed-less pages (a post)
+            // re-searching would keep the navigation veil re-armed forever.
+            if (!searching && findParent()) scheduleFeedSearch(2000);
+            return;
+        }
+        // A newer feed has appeared (Reddit swapped it without our observers
+        // noticing): move over to it.
+        const found = findParent();
+        if (found && found !== parent && !parent.contains(found)) {
+            engageFeed(found, true);
+            return;
+        }
+        // Hidden past its deadline (a reveal timer was lost).
+        if (hidden && !suppressed && performance.now() > hideDeadline) revealFeed();
+        if (syncLayoutSwitch()) { requestLayout(); return; }
+        const engaged = document.documentElement.classList.contains('rmc-grid');
+        if (engaged) {
+            // A card on the page we never positioned.
+            if (parent.querySelector('article:not([data-rmc-key]) shreddit-post, shreddit-ad-post:not([data-rmc-key])')) {
+                requestLayout();
+            }
+        } else if (!cleanup && !isMixedFeed() && !isTooNarrow()) {
+            // Stood down earlier, but the grid would fit now.
+            requestLayout();
+        }
+    };
 
     // --- Bootstrap -----------------------------------------------------------
     // The script runs at document-start (see @run-at) so the veil can beat
@@ -1175,9 +1505,10 @@
     // polls on animation frames (which also keep re-arming the veil, see
     // searchForFeed). Only the safety-net observer needs a node to watch, so
     // it alone waits for the DOM.
+    // Watch <body>, not <main>: Reddit can replace <main> itself, which left
+    // the safety net observing a detached node.
     const attachSafetyNet = function() {
-        const main = document.querySelector("main") || document.body;
-        domSafetyNet.observe(main, { childList: true, subtree: true });
+        domSafetyNet.observe(document.body, { childList: true, subtree: true });
     };
 
     const boot = function() {
@@ -1187,6 +1518,7 @@
         document.addEventListener('click', onLinkActivation, true);
         observeApp();
         scheduleFeedSearch();
+        setInterval(watchdog, 1000);
         if (document.body) attachSafetyNet();
         else document.addEventListener('DOMContentLoaded', attachSafetyNet, { once: true });
     };
